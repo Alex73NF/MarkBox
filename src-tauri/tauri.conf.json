@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MarkBox",
-  "version": "0.1.0",
   "identifier": "com.alex73nf.markbox",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -10,7 +9,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "macOSPrivateApi": true,
     "windows": [
       { "label": "main", "title": "MarkBox", "width": 420, "height": 380, "resizable": false, "center": true }

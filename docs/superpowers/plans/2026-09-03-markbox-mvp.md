@@ -1,5 +1,7 @@
 # MarkBox MVP Implementation Plan
 
+> **状态：已全部完成 @ v0.1.0。** 历史文档，勾选项不再逐个回填。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 实现 MarkBox v0.1.0——托盘常驻的屏幕边框标记工具：主界面/托盘唤起微信截图式圈选（拖拽→手柄调整→✓/回车确认），确认后留下点击穿透的置顶边框，单框替换。

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "All app windows: main UI, per-monitor selection overlays, and the click-through mark border.",
   "windows": ["main", "overlay-*", "mark"],
   "permissions": [
     "core:default"

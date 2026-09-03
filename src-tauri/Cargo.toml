@@ -12,12 +12,14 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "markbox_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 桌面端只需 rlib 供 main.rs 引用；staticlib/cdylib 是 Tauri 移动端目标才需要的
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# macos-private-api：macOS 下 tauri dev 的透明窗口必需（对应 tauri.conf.json 的 macOSPrivateApi），Windows 上无副作用，勿清理
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }

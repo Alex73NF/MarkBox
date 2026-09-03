@@ -126,5 +126,5 @@ Windows 托盘常驻小工具：从主界面或托盘一键唤起微信截图式
 ## 交付
 
 - 仓库：`git@github.com:Alex73NF/MarkBox.git`（main 分支）
-- CI（GitHub Actions，`windows-latest`）：tag 推送时构建 NSIS 安装包 + 免安装 exe，附到 Release
+- CI（GitHub Actions，`windows-latest`）：tag 推送时构建 NSIS 安装包 + 免安装版 zip（内含 markbox.exe，解压即用），附到 Release
 - 版本号从 v0.1.0 起
