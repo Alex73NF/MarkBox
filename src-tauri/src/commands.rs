@@ -10,15 +10,15 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MonitorRect { pub x: i32, pub y: i32, pub width: u32, pub height: u32 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OverlayInit { pub monitor: MonitorRect }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhysRect { pub x: i32, pub y: i32, pub w: u32, pub h: u32 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConfirmPayload { pub rect: PhysRect }
 
@@ -74,7 +74,9 @@ pub(crate) fn cancel_selection(app: AppHandle) {
 pub(crate) fn clear_mark(app: AppHandle) {
     windows::destroy_mark(&app);
     // destroy 在事件循环异步生效，事后查询会拿到过期状态，直接广播已知结果
-    let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false }));
+    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false })) {
+        eprintln!("[markbox] 发送 mark-state 失败: {e}");
+    }
 }
 
 /// 托盘菜单事件分发用

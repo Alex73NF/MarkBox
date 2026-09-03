@@ -11,6 +11,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # 版本单源化守卫：tag 必须等于 Cargo.toml 的包版本（版本唯一权威源），防漂移发错版本
+      - name: 校验 tag 与 Cargo.toml 版本一致
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $m = Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          $v = $m.Matches[0].Groups[1].Value
+          if ($env:TAG -ne "v$v") { throw "tag $($env:TAG) 与 src-tauri/Cargo.toml 包版本 v$v 不一致" }
       # pnpm 版本取自 package.json 的 packageManager 字段
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -20,9 +29,14 @@ jobs:
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      # vitest 不做类型检查：tsc 错误必须在产出发布物之前暴露
+      - run: pnpm build
       - name: Rust 测试
         working-directory: src-tauri
         run: cargo test
+      - name: Rust lint
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
       - run: pnpm tauri build
       - name: 打包免安装版
         shell: pwsh

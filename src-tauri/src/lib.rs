@@ -60,11 +60,9 @@ pub fn run() {
                     eprintln!("[markbox] 隐藏主窗口失败: {e}");
                 }
             }
-            WindowEvent::Destroyed => {
+            WindowEvent::Destroyed if window.label().starts_with("overlay-") => {
                 // 任一 overlay 被销毁（崩溃/拔屏）→ 兜底清掉全部圈选层
-                if window.label().starts_with("overlay-") {
-                    windows::end_selection(window.app_handle());
-                }
+                windows::end_selection(window.app_handle());
             }
             _ => {}
         })

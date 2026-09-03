@@ -42,6 +42,10 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
                 })
             })
             .collect();
+        if infos.is_empty() {
+            // 一台显示器都没有：保留主窗口并报错，别把用户丢进只剩托盘的黑屏
+            return Err(tauri::Error::Io(std::io::Error::other("no available monitors")));
+        }
         if let Some(main) = app.get_webview_window("main") {
             if let Err(e) = main.hide() {
                 eprintln!("[markbox] 隐藏主窗口失败: {e}");

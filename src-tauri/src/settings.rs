@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager};
+
+/// 并发 save_to 的临时文件序号：固定 tmp 名会让两个并发写互相踩踏
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -48,8 +52,13 @@ pub(crate) fn save_to(path: &Path, s: &Settings) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // 先写临时文件再原子改名：写入中途崩溃也不会留下半个 settings.json
-    let tmp = path.with_extension("json.tmp");
+    // 先写临时文件再原子改名：写入中途崩溃也不会留下半个 settings.json；
+    // tmp 名带 pid + 序号，防并发 save_to（如防抖保存与颜色即时保存交叠）写同一 tmp 互相覆盖
+    let tmp = path.with_extension(format!(
+        "json.tmp-{}-{}",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, serde_json::to_string_pretty(s).expect("settings serialize"))?;
     std::fs::rename(&tmp, path)
 }

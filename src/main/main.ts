@@ -29,6 +29,7 @@ report('get_settings', invoke<Settings>('get_settings').then(fillForm));
 
 /** 颜色选择等低频改动：立即保存；失败时以持久化真值回滚表单 */
 async function saveNow() {
+  saveSeq++; // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
   try {
     fillForm(await invoke<Settings>('save_settings', { settings: readForm() }));
   } catch (err) {
