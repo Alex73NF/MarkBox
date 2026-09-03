@@ -30,8 +30,12 @@ pub(crate) fn get_settings(state: tauri::State<AppState>) -> settings::Settings 
 #[tauri::command]
 pub(crate) fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: settings::Settings) -> Result<settings::Settings, String> {
     let normalized = settings::normalize(&settings);
+    // 写盘与内存提交在同一把锁内串行：并发 saveNow 交错时保证内存 == 磁盘，
+    // 否则 A 写盘 → B 写盘 → B 先拿锁 → A 后拿锁会让磁盘是 B、内存是 A
+    let mut guard = state.settings.lock().unwrap();
     settings::save_to(&settings::settings_path(&app), &normalized).map_err(|e| e.to_string())?;
-    *state.settings.lock().unwrap() = normalized.clone();
+    *guard = normalized.clone();
+    drop(guard);
     if let Err(e) = app.emit_to("mark", "settings-updated", &normalized) {
         eprintln!("[markbox] 发送 settings-updated 失败: {e}");
     }

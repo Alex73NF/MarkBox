@@ -51,11 +51,12 @@ function render() {
   size.style.display = rect.w === 0 || rect.h === 0 ? 'none' : ''; // 0×0（尚未拖出）不显示尺寸标签
   size.textContent = `${Math.round(rect.w * dpr)} × ${Math.round(rect.h * dpr)}`;
   size.style.top = rect.y < SIZE_FLIP_Y ? '4px' : `-${LABEL_H}px`;
-  // 确认按钮：框右下角外侧，贴底翻到框上方，贴右收到框内
+  // 确认按钮：框右下角外侧，贴底翻到框上方（贴顶翻不动时收进框内），贴右收到框内
   let bx = rect.w + GAP;
   if (rect.x + rect.w + btnW > bounds.w) bx = rect.w - btnW;
   let by = rect.h + GAP;
   if (rect.y + rect.h + btnH > bounds.h) by = -btnH - GAP;
+  if (rect.y + by < 0) by = GAP; // 贴顶翻转也会越出窗口时收进框内
   confirmBtn.style.left = `${Math.max(0, bx)}px`;
   confirmBtn.style.top = `${by}px`;
 }

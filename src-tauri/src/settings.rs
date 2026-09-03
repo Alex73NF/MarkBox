@@ -63,6 +63,20 @@ pub(crate) fn save_to(path: &Path, s: &Settings) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// 清理崩溃残留的临时文件：save_to 崩在写盘与改名之间会留下 settings.json.tmp-*（唯一名不再自覆盖），
+/// 启动时 best-effort 清掉；此时没有任何在途保存，也不会误删
+pub(crate) fn cleanup_tmp_leftovers(settings_path: &Path) {
+    let Some(dir) = settings_path.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("settings.json.tmp-") {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                eprintln!("[markbox] 清理残留临时文件 {} 失败: {e}", entry.path().display());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +162,23 @@ mod tests {
         assert_eq!(s.border_width, 10);
         assert!(!needs_repair);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn cleanup_removes_stale_tmp_leftovers_only() {
+        let dir = std::env::temp_dir().join(format!("markbox-test-cleanup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("settings.json");
+        std::fs::write(&real, "{}").unwrap();
+        let stale = dir.join("settings.json.tmp-424242-7");
+        std::fs::write(&stale, "half written").unwrap();
+        let foreign = dir.join("settings.json.bak"); // 非 tmp 命名的一律不动
+        std::fs::write(&foreign, "keep").unwrap();
+        cleanup_tmp_leftovers(&real);
+        assert!(real.exists());
+        assert!(!stale.exists());
+        assert!(foreign.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

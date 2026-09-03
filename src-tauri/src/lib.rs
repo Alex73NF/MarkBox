@@ -2,6 +2,7 @@ mod commands;
 mod settings;
 mod windows;
 
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -14,6 +15,8 @@ pub(crate) struct AppState {
     pub(crate) settings: Mutex<settings::Settings>,
     pub(crate) monitors: Mutex<Vec<(String, MonitorRect)>>,
     pub(crate) selecting: Mutex<bool>,
+    // 圈选创建代次：end_selection（取消/确认/兜底销毁）递增，创建循环据此发现会话已被取消并静默中止
+    pub(crate) selection_gen: AtomicU64,
 }
 
 pub fn run() {
@@ -23,6 +26,8 @@ pub fn run() {
         }))
         .setup(|app| {
             let path = settings::settings_path(app.handle());
+            // save_to 崩在写盘与改名之间会留下唯一名 tmp，启动时先清掉再加载
+            settings::cleanup_tmp_leftovers(&path);
             // 文件缺失/损坏时回退默认并重建；正常路径不多写一次磁盘
             let (loaded, needs_repair) = settings::load_or_repair(&path);
             if needs_repair {
@@ -30,7 +35,12 @@ pub fn run() {
                     eprintln!("[markbox] 重建设置文件失败: {e}");
                 }
             }
-            app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default(), selecting: Mutex::default() });
+            app.manage(AppState {
+                settings: Mutex::new(loaded),
+                monitors: Mutex::default(),
+                selecting: Mutex::default(),
+                selection_gen: AtomicU64::new(0),
+            });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
             let clear = MenuItem::with_id(app, "clear", "清除标记", true, None::<&str>)?;
