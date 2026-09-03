@@ -4,14 +4,32 @@
     <meta charset="UTF-8" />
     <title>MarkBox</title>
     <style>
-      body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; color: #222; }
-      button { padding: 6px 14px; margin-right: 8px; cursor: pointer; }
+      body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; color: #222; user-select: none; }
+      h1 { font-size: 16px; margin: 0 0 12px; }
+      .btns button { padding: 8px 0; flex: 1; cursor: pointer; }
+      .btns { display: flex; gap: 8px; margin-bottom: 16px; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 0; }
+      legend { font-size: 12px; color: #888; padding: 0 6px; }
+      .row { display: flex; align-items: center; gap: 8px; margin: 10px 2px; font-size: 13px; }
+      .row label { width: 52px; }
+      .row output { width: 28px; text-align: right; }
+      input[type="color"] { width: 40px; height: 24px; padding: 0; border: none; background: none; }
+      input[type="range"] { flex: 1; }
     </style>
   </head>
   <body>
     <h1>MarkBox</h1>
-    <button id="start">开始圈选</button>
-    <button id="clear" disabled>清除标记</button>
+    <div class="btns">
+      <button id="start">开始圈选</button>
+      <button id="clear" disabled>清除标记</button>
+    </div>
+    <fieldset>
+      <legend>边框外观（即时生效）</legend>
+      <div class="row"><label>颜色</label><input type="color" id="color" /></div>
+      <div class="row"><label>粗细</label><input type="range" id="width" min="1" max="10" step="1" /><output id="widthv">3</output></div>
+      <div class="row"><label>圆角</label><input type="range" id="radius" min="0" max="16" step="1" /><output id="radiusv">0</output></div>
+    </fieldset>
     <script type="module" src="/src/main/main.ts"></script>
   </body>
 </html>
