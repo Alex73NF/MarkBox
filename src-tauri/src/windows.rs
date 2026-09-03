@@ -3,19 +3,9 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder,
 };
 
-use crate::commands::OverlayInit;
+use crate::commands::{MonitorRect, OverlayInit};
 
-#[derive(Clone, Copy, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MonitorInfo {
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub scale_factor: f64,
-}
-
-pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
+pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<crate::AppState>();
     {
         let mut selecting = state.selecting.lock().unwrap();
@@ -26,16 +16,19 @@ pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     }
     let result = (|| -> tauri::Result<()> {
         // 先枚举显示器再隐主窗口：枚举失败不能把用户丢在黑屏里
-        let mut infos = Vec::new();
-        for (i, m) in app.available_monitors()?.iter().enumerate() {
-            infos.push((format!("overlay-{i}"), MonitorInfo {
-                x: m.position().x,
-                y: m.position().y,
-                width: m.size().width,
-                height: m.size().height,
-                scale_factor: m.scale_factor(),
-            }));
-        }
+        let infos: Vec<(String, MonitorRect)> = app
+            .available_monitors()?
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (format!("overlay-{i}"), MonitorRect {
+                    x: m.position().x,
+                    y: m.position().y,
+                    width: m.size().width,
+                    height: m.size().height,
+                })
+            })
+            .collect();
         if let Some(main) = app.get_webview_window("main") {
             if let Err(e) = main.hide() {
                 eprintln!("[markbox] 隐藏主窗口失败: {e}");
@@ -85,7 +78,7 @@ pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// 显示并聚焦主窗口（单实例二次唤起 / 托盘 / 圈选失败恢复共用）
-pub fn show_main(app: &AppHandle) {
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         if let Err(e) = w.show() {
             eprintln!("[markbox] 显示主窗口失败: {e}");
@@ -96,7 +89,7 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-pub fn end_selection(app: &AppHandle) {
+pub(crate) fn end_selection(app: &AppHandle) {
     for (label, win) in app.webview_windows() {
         if label.starts_with("overlay-") {
             if let Err(e) = win.destroy() {
@@ -106,7 +99,7 @@ pub fn end_selection(app: &AppHandle) {
     }
 }
 
-pub fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
+pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
     destroy_mark(app);
     let build = || {
         WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
@@ -142,7 +135,7 @@ pub fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Res
     Ok(())
 }
 
-pub fn destroy_mark(app: &AppHandle) {
+pub(crate) fn destroy_mark(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("mark") {
         if let Err(e) = win.destroy() {
             eprintln!("[markbox] 销毁标记窗失败: {e}");
@@ -150,16 +143,18 @@ pub fn destroy_mark(app: &AppHandle) {
     }
 }
 
-pub fn mark_exists(app: &AppHandle) -> bool {
+pub(crate) fn mark_exists(app: &AppHandle) -> bool {
     app.get_webview_window("mark").is_some()
 }
 
-pub fn emit_mark_state(app: &AppHandle) {
-    let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": mark_exists(app) }));
+pub(crate) fn emit_mark_state(app: &AppHandle) {
+    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": mark_exists(app) })) {
+        eprintln!("[markbox] 发送 mark-state 失败: {e}");
+    }
 }
 
 /// 显示器热插拔保护：确认时 rect 必须仍落在某个现存显示器上
-pub fn rect_on_existing_monitor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> bool {
+pub(crate) fn rect_on_existing_monitor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> bool {
     let Ok(monitors) = app.available_monitors() else { return false };
     monitors.iter().any(|m| {
         let (mx, my) = (m.position().x, m.position().y);
@@ -168,13 +163,8 @@ pub fn rect_on_existing_monitor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32)
     })
 }
 
-pub fn overlay_init(app: &AppHandle, label: &str) -> Option<OverlayInit> {
+pub(crate) fn overlay_init(app: &AppHandle, label: &str) -> Option<OverlayInit> {
     let state = app.try_state::<crate::AppState>()?;
     let monitors = state.monitors.lock().unwrap();
-    monitors.iter().find(|(l, _)| l == label).map(|(_, info)| OverlayInit {
-        monitor: crate::commands::MonitorRect {
-            x: info.x, y: info.y, width: info.width, height: info.height,
-        },
-        scale_factor: info.scale_factor,
-    })
+    monitors.iter().find(|(l, _)| l == label).map(|(_, info)| OverlayInit { monitor: *info })
 }

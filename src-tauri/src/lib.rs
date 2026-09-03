@@ -3,36 +3,17 @@ mod settings;
 mod windows;
 
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
 use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::WindowEvent;
+use tauri::{Manager, WindowEvent};
 
-use crate::windows::MonitorInfo;
+use crate::commands::MonitorRect;
 
 #[derive(Default)]
-pub struct AppState {
-    pub settings: Mutex<settings::Settings>,
-    pub monitors: Mutex<Vec<(String, MonitorInfo)>>,
-    pub selecting: Mutex<bool>,
-}
-
-pub fn settings_path(app: &AppHandle) -> std::path::PathBuf {
-    app.path().app_config_dir().unwrap().join("settings.json")
-}
-
-#[tauri::command]
-fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
-    state.settings.lock().unwrap().clone()
-}
-
-#[tauri::command]
-fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: settings::Settings) -> Result<settings::Settings, String> {
-    let normalized = settings::normalize(&settings);
-    settings::save_to(&settings_path(&app), &normalized).map_err(|e| e.to_string())?;
-    *state.settings.lock().unwrap() = normalized.clone();
-    let _ = app.emit_to("mark", "settings-updated", &normalized);
-    Ok(normalized)
+pub(crate) struct AppState {
+    pub(crate) settings: Mutex<settings::Settings>,
+    pub(crate) monitors: Mutex<Vec<(String, MonitorRect)>>,
+    pub(crate) selecting: Mutex<bool>,
 }
 
 pub fn run() {
@@ -41,9 +22,14 @@ pub fn run() {
             windows::show_main(app);
         }))
         .setup(|app| {
-            let loaded = settings::load_from(&settings_path(app.handle()));
-            // 回写默认值：重建缺失/损坏的配置文件并持久化归一化结果
-            let _ = settings::save_to(&settings_path(app.handle()), &loaded);
+            let path = settings::settings_path(app.handle());
+            // 文件缺失/损坏时回退默认并重建；正常路径不多写一次磁盘
+            let (loaded, needs_repair) = settings::load_or_repair(&path);
+            if needs_repair {
+                if let Err(e) = settings::save_to(&path, &loaded) {
+                    eprintln!("[markbox] 重建设置文件失败: {e}");
+                }
+            }
             app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default(), selecting: Mutex::default() });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
@@ -53,7 +39,7 @@ pub fn run() {
             let menu = MenuBuilder::new(app).items(&[&select, &clear, &show]).separator().item(&quit).build()?;
 
             TrayIconBuilder::with_id("markbox-tray")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(app.default_window_icon().expect("default window icon must exist").clone())
                 .tooltip("MarkBox")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -70,7 +56,9 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 api.prevent_close();
-                let _ = window.hide();
+                if let Err(e) = window.hide() {
+                    eprintln!("[markbox] 隐藏主窗口失败: {e}");
+                }
             }
             WindowEvent::Destroyed => {
                 // 任一 overlay 被销毁（崩溃/拔屏）→ 兜底清掉全部圈选层
@@ -81,7 +69,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            get_settings, save_settings,
+            commands::get_settings, commands::save_settings,
             commands::start_selection, commands::overlay_ready,
             commands::confirm_selection, commands::cancel_selection, commands::clear_mark
         ])

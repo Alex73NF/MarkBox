@@ -6,6 +6,10 @@ import { report } from '../shared/report';
 
 const MIN_DRAG = 5;                                   // 松手时小于此值视为误触
 const MIN_SIZE = { w: 10, h: 10 };                    // 手柄调整的最小尺寸
+const GAP = 8;                                        // 确认按钮与选区的间距
+const SIZE_FLIP_Y = 30;                               // 尺寸标签贴顶翻转阈值
+const LABEL_H = 26;                                   // 尺寸标签高度
+const CONFIRM_BTN_FALLBACK = { w: 84, h: 30 };        // 按钮进入调整态前的估算值（进入后以实测为准）
 const label = getCurrentWebviewWindow().label;
 
 let init: OverlayInit;                                // 本屏物理几何
@@ -14,6 +18,8 @@ let phase: 'idle' | 'draft' | 'adjust' | 'closing' = 'idle';
 let rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 let dragStart = { x: 0, y: 0 };
 let active: { kind: 'move'; base: Rect } | { kind: 'resize'; handle: Handle; base: Rect } | null = null;
+let btnW = CONFIRM_BTN_FALLBACK.w;
+let btnH = CONFIRM_BTN_FALLBACK.h;
 
 const sel = document.getElementById('sel')!;
 const size = document.getElementById('size')!;
@@ -44,22 +50,23 @@ function render() {
   const dpr = window.devicePixelRatio;
   size.style.display = rect.w === 0 || rect.h === 0 ? 'none' : ''; // 0×0（尚未拖出）不显示尺寸标签
   size.textContent = `${Math.round(rect.w * dpr)} × ${Math.round(rect.h * dpr)}`;
-  size.style.left = '0px';
-  size.style.top = rect.y < 30 ? '4px' : '-26px';
+  size.style.top = rect.y < SIZE_FLIP_Y ? '4px' : `-${LABEL_H}px`;
   // 确认按钮：框右下角外侧，贴底翻到框上方，贴右收到框内
-  const btnW = 84, btnH = 30;
-  let bx = rect.w + 8;
+  let bx = rect.w + GAP;
   if (rect.x + rect.w + btnW > bounds.w) bx = rect.w - btnW;
-  let by = rect.h + 8;
-  if (rect.y + rect.h + btnH > bounds.h) by = -btnH - 8;
+  let by = rect.h + GAP;
+  if (rect.y + rect.h + btnH > bounds.h) by = -btnH - GAP;
   confirmBtn.style.left = `${Math.max(0, bx)}px`;
   confirmBtn.style.top = `${by}px`;
 }
 
 function enterAdjust() {
   phase = 'adjust';
-  sel.classList.add('adjusting');
+  sel.classList.add('adjusting'); // 先亮出按钮才能量到真实尺寸
+  btnW = confirmBtn.offsetWidth;
+  btnH = confirmBtn.offsetHeight;
   document.body.style.cursor = 'default';
+  render();
 }
 
 window.addEventListener('pointerdown', (e) => {

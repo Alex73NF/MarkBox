@@ -46,3 +46,34 @@ describe('clampRect', () => {
     expect(clampRect({ x: -50, y: -50, w: 200, h: 200 }, B)).toEqual({ x: 0, y: 0, w: 150, h: 150 });
   });
 });
+
+// 左侧负原点显示器（主屏左边的扩展屏），生产环境真实存在
+const B2: Rect = { x: -1920, y: -200, w: 1000, h: 800 };
+
+describe('负原点显示器', () => {
+  it('normalizeDrag 在负坐标下正常归一化', () => {
+    expect(normalizeDrag(-1800, -100, -1600, 0)).toEqual({ x: -1800, y: -100, w: 200, h: 100 });
+  });
+  it('normalizeDrag 起点终点重合得 0 尺寸', () => {
+    expect(normalizeDrag(100, 100, 100, 100)).toEqual({ x: 100, y: 100, w: 0, h: 0 });
+  });
+  it('applyResize ne 手柄不越负原点屏的上缘', () => {
+    const r: Rect = { x: -1800, y: -100, w: 200, h: 100 };
+    expect(applyResize(r, 'ne', 0, -500, MIN, B2)).toEqual({ x: -1800, y: -200, w: 200, h: 200 });
+  });
+  it('applyResize sw 手柄不越负原点屏的左缘/下缘', () => {
+    const r: Rect = { x: -1800, y: -100, w: 200, h: 100 };
+    expect(applyResize(r, 'sw', -500, 500, MIN, B2)).toEqual({ x: -1920, y: -100, w: 320, h: 600 });
+  });
+  it('applyMove 在负原点屏内 y/右缘钳制', () => {
+    const r: Rect = { x: -1500, y: -180, w: 100, h: 100 };
+    expect(applyMove(r, 0, -500, B2)).toEqual({ x: -1500, y: -200, w: 100, h: 100 });
+    expect(applyMove(r, 500, 0, B2)).toEqual({ x: -1020, y: -180, w: 100, h: 100 });
+  });
+  it('clampRect 部分相交按交集截取', () => {
+    expect(clampRect({ x: -2000, y: -300, w: 200, h: 200 }, B2)).toEqual({ x: -1920, y: -200, w: 120, h: 100 });
+  });
+  it('clampRect 完全不相交时 w/h 归 0', () => {
+    expect(clampRect({ x: 500, y: 700, w: 100, h: 100 }, B2)).toEqual({ x: 500, y: 700, w: 0, h: 0 });
+  });
+});
