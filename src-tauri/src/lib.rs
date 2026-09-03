@@ -1,11 +1,19 @@
+mod commands;
 mod settings;
+mod windows;
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri::menu::{MenuBuilder, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::WindowEvent;
+
+use crate::windows::MonitorInfo;
 
 #[derive(Default)]
 pub struct AppState {
     pub settings: Mutex<settings::Settings>,
+    pub monitors: Mutex<Vec<(String, MonitorInfo)>>,
 }
 
 pub fn settings_path(app: &AppHandle) -> std::path::PathBuf {
@@ -36,10 +44,48 @@ pub fn run() {
         }))
         .setup(|app| {
             let loaded = settings::load_from(&settings_path(app.handle()));
-            app.manage(AppState { settings: Mutex::new(loaded) });
+            app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default() });
+
+            let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
+            let clear = MenuItem::with_id(app, "clear", "清除标记", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = MenuBuilder::new(app).items(&[&select, &clear, &show]).separator().item(&quit).build()?;
+
+            TrayIconBuilder::with_id("markbox-tray")
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("MarkBox")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| commands::handle_tray(app, event.id().as_ref()))
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        commands::handle_tray(tray.app_handle(), "show");
+                    }
+                })
+                .build(app)?;
+
+            let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false }));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_settings, save_settings])
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            WindowEvent::Destroyed => {
+                // 任一 overlay 被销毁（崩溃/拔屏）→ 兜底清掉全部圈选层
+                if window.label().starts_with("overlay-") {
+                    windows::end_selection(window.app_handle());
+                }
+            }
+            _ => {}
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_settings, save_settings,
+            commands::start_selection, commands::overlay_ready,
+            commands::confirm_selection, commands::cancel_selection, commands::clear_mark
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
