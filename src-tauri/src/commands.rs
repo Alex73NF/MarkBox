@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::windows;
 
@@ -17,7 +17,7 @@ pub struct PhysRect { pub x: i32, pub y: i32, pub w: u32, pub h: u32 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfirmPayload { #[allow(dead_code)] pub label: String, pub rect: PhysRect }
+pub struct ConfirmPayload { pub rect: PhysRect }
 
 #[tauri::command]
 pub fn start_selection(app: AppHandle) -> Result<(), String> {
@@ -35,7 +35,10 @@ pub fn confirm_selection(app: AppHandle, payload: ConfirmPayload) -> Result<(), 
     let ok = windows::rect_on_existing_monitor(&app, r.x, r.y, r.w, r.h);
     windows::end_selection(&app);
     if ok {
-        windows::spawn_mark(&app, r.x, r.y, r.w, r.h).map_err(|e| e.to_string())?;
+        if let Err(e) = windows::spawn_mark(&app, r.x, r.y, r.w, r.h) {
+            windows::show_main(&app); // 标记窗建失败也要把主窗口还给用户，别丢在黑屏里
+            return Err(e.to_string());
+        }
     } else {
         // 圈选期间显示器被拔掉：整单取消
         windows::emit_mark_state(&app);
@@ -51,20 +54,20 @@ pub fn cancel_selection(app: AppHandle) {
 #[tauri::command]
 pub fn clear_mark(app: AppHandle) {
     windows::destroy_mark(&app);
-    windows::emit_mark_state(&app);
+    // destroy 在事件循环异步生效，事后查询会拿到过期状态，直接广播已知结果
+    let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false }));
 }
 
 /// 托盘菜单事件分发用
 pub fn handle_tray(app: &AppHandle, id: &str) {
     match id {
-        "select" => { let _ = windows::begin_selection(app); }
-        "clear" => clear_mark(app.clone()),
-        "show" => {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
+        "select" => {
+            if let Err(e) = windows::begin_selection(app) {
+                eprintln!("[markbox] 发起圈选失败: {e}");
             }
         }
+        "clear" => clear_mark(app.clone()),
+        "show" => windows::show_main(app),
         "quit" => app.exit(0),
         _ => {}
     }

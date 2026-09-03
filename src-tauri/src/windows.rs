@@ -1,6 +1,6 @@
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl,
-    WebviewWindowBuilder,
+    WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::commands::OverlayInit;
@@ -16,48 +16,92 @@ pub struct MonitorInfo {
 }
 
 pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
-    // 已在圈选中则忽略，防止重复唤起
-    if app.webview_windows().keys().any(|l| l.starts_with("overlay-")) {
-        return Ok(());
+    let state = app.state::<crate::AppState>();
+    {
+        let mut selecting = state.selecting.lock().unwrap();
+        if *selecting {
+            return Ok(()); // 已在圈选中则忽略，防止重复唤起（按钮双击/主窗口+托盘并发）
+        }
+        *selecting = true;
     }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    let mut infos = Vec::new();
-    for (i, m) in app.available_monitors()?.iter().enumerate() {
-        infos.push((format!("overlay-{i}"), MonitorInfo {
-            x: m.position().x,
-            y: m.position().y,
-            width: m.size().width,
-            height: m.size().height,
-            scale_factor: m.scale_factor(),
-        }));
-    }
-    // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪
-    if let Some(state) = app.try_state::<crate::AppState>() {
+    let result = (|| -> tauri::Result<()> {
+        // 先枚举显示器再隐主窗口：枚举失败不能把用户丢在黑屏里
+        let mut infos = Vec::new();
+        for (i, m) in app.available_monitors()?.iter().enumerate() {
+            infos.push((format!("overlay-{i}"), MonitorInfo {
+                x: m.position().x,
+                y: m.position().y,
+                width: m.size().width,
+                height: m.size().height,
+                scale_factor: m.scale_factor(),
+            }));
+        }
+        if let Some(main) = app.get_webview_window("main") {
+            if let Err(e) = main.hide() {
+                eprintln!("[markbox] 隐藏主窗口失败: {e}");
+            }
+        }
+        // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪
         *state.monitors.lock().unwrap() = infos.clone();
+        let cursor = app.cursor_position().ok();
+        let mut last: Option<WebviewWindow> = None;
+        let mut focus_target: Option<WebviewWindow> = None;
+        for (label, info) in &infos {
+            let win = WebviewWindowBuilder::new(app, label.as_str(), WebviewUrl::App("overlay.html".into()))
+                .title("markbox-overlay")
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .visible(false)
+                .build()?;
+            win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
+            win.set_size(Size::Physical(PhysicalSize::new(info.width, info.height)))?;
+            win.show()?;
+            // 键盘焦点是 Esc/Enter 取消/确认的前提：优先光标所在屏，否则兜底最后建出的
+            if cursor.is_some_and(|c| {
+                c.x >= f64::from(info.x) && c.x < f64::from(info.x) + f64::from(info.width)
+                    && c.y >= f64::from(info.y) && c.y < f64::from(info.y) + f64::from(info.height)
+            }) {
+                focus_target = Some(win.clone());
+            }
+            last = Some(win);
+        }
+        if let Some(win) = focus_target.or(last) {
+            if let Err(e) = win.set_focus() {
+                eprintln!("[markbox] overlay 设置键盘焦点失败: {e}");
+            }
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        // 创建中途失败：清掉已建出的 overlay、恢复主窗口，错误继续上抛
+        end_selection(app);
+        show_main(app);
     }
-    for (label, info) in &infos {
-        let win = WebviewWindowBuilder::new(app, label.as_str(), WebviewUrl::App("overlay.html".into()))
-            .title("markbox-overlay")
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .visible(false)
-            .build()?;
-        win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
-        win.set_size(Size::Physical(PhysicalSize::new(info.width, info.height)))?;
-        win.show()?;
+    *state.selecting.lock().unwrap() = false;
+    result
+}
+
+/// 显示并聚焦主窗口（单实例二次唤起 / 托盘 / 圈选失败恢复共用）
+pub fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if let Err(e) = w.show() {
+            eprintln!("[markbox] 显示主窗口失败: {e}");
+        }
+        if let Err(e) = w.set_focus() {
+            eprintln!("[markbox] 聚焦主窗口失败: {e}");
+        }
     }
-    Ok(())
 }
 
 pub fn end_selection(app: &AppHandle) {
     for (label, win) in app.webview_windows() {
         if label.starts_with("overlay-") {
-            let _ = win.destroy();
+            if let Err(e) = win.destroy() {
+                eprintln!("[markbox] 销毁 {label} 失败: {e}");
+            }
         }
     }
 }
@@ -92,13 +136,17 @@ pub fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Res
     win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
     win.set_ignore_cursor_events(true)?;
     win.show()?;
-    let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": true }));
+    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": true })) {
+        eprintln!("[markbox] 发送 mark-state 失败: {e}");
+    }
     Ok(())
 }
 
 pub fn destroy_mark(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("mark") {
-        let _ = win.destroy();
+        if let Err(e) = win.destroy() {
+            eprintln!("[markbox] 销毁标记窗失败: {e}");
+        }
     }
 }
 

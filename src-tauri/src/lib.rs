@@ -14,6 +14,7 @@ use crate::windows::MonitorInfo;
 pub struct AppState {
     pub settings: Mutex<settings::Settings>,
     pub monitors: Mutex<Vec<(String, MonitorInfo)>>,
+    pub selecting: Mutex<bool>,
 }
 
 pub fn settings_path(app: &AppHandle) -> std::path::PathBuf {
@@ -37,16 +38,13 @@ fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: settin
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            windows::show_main(app);
         }))
         .setup(|app| {
             let loaded = settings::load_from(&settings_path(app.handle()));
             // 回写默认值：重建缺失/损坏的配置文件并持久化归一化结果
             let _ = settings::save_to(&settings_path(app.handle()), &loaded);
-            app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default() });
+            app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default(), selecting: Mutex::default() });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
             let clear = MenuItem::with_id(app, "clear", "清除标记", true, None::<&str>)?;

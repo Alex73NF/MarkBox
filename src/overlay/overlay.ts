@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { ConfirmPayload, OverlayInit, PhysRect } from '../shared/types';
 import { applyMove, applyResize, clampRect, normalizeDrag, type Handle, type Rect } from '../shared/geometry';
+import { report } from '../shared/report';
 
 const MIN_DRAG = 5;                                   // 松手时小于此值视为误触
 const MIN_SIZE = { w: 10, h: 10 };                    // 手柄调整的最小尺寸
@@ -20,7 +21,7 @@ const confirmBtn = document.getElementById('confirm')!;
 
 const cancel = () => {
   if (phase === 'closing') return; // 确认已触发、teardown 进行中，忽略 Esc/右键
-  invoke('cancel_selection');
+  report('cancel_selection', invoke('cancel_selection'));
 };
 const confirm = () => {
   if (phase !== 'adjust') return; // 防回车连发/按钮双击重复确认
@@ -32,7 +33,7 @@ const confirm = () => {
     w: Math.round(rect.w * dpr),
     h: Math.round(rect.h * dpr),
   };
-  invoke('confirm_selection', { payload: { label, rect: phys } satisfies ConfirmPayload });
+  report('confirm_selection', invoke('confirm_selection', { payload: { rect: phys } satisfies ConfirmPayload }));
 };
 
 function render() {
@@ -41,6 +42,7 @@ function render() {
   sel.style.width = `${rect.w}px`;
   sel.style.height = `${rect.h}px`;
   const dpr = window.devicePixelRatio;
+  size.style.display = rect.w === 0 || rect.h === 0 ? 'none' : ''; // 0×0（尚未拖出）不显示尺寸标签
   size.textContent = `${Math.round(rect.w * dpr)} × ${Math.round(rect.h * dpr)}`;
   size.style.left = '0px';
   size.style.top = rect.y < 30 ? '4px' : '-26px';
@@ -62,8 +64,10 @@ function enterAdjust() {
 
 window.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
+  if (!init) return; // overlay_ready 未返回前 bounds 未就绪，不响应
   const target = e.target as HTMLElement;
-  if (phase === 'idle') {
+  if (phase === 'idle' || phase === 'draft') {
+    // draft 中再次按下视为重新起拖（指针事件万一丢失时的自恢复出口）
     phase = 'draft';
     dragStart = { x: e.clientX, y: e.clientY };
     rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
@@ -78,7 +82,15 @@ window.addEventListener('pointerdown', (e) => {
     }
     dragStart = { x: e.clientX, y: e.clientY };
   }
+  // 跨屏拖动兜底：显式捕获指针，pointerup 不因指针移出窗口而丢失
+  document.body.setPointerCapture(e.pointerId);
 });
+
+const releaseCapture = (e: PointerEvent) => {
+  if (document.body.hasPointerCapture(e.pointerId)) {
+    document.body.releasePointerCapture(e.pointerId);
+  }
+};
 
 window.addEventListener('pointermove', (e) => {
   if (phase === 'draft') {
@@ -93,7 +105,8 @@ window.addEventListener('pointermove', (e) => {
   }
 });
 
-window.addEventListener('pointerup', () => {
+window.addEventListener('pointerup', (e) => {
+  releaseCapture(e);
   if (phase === 'draft') {
     if (rect.w < MIN_DRAG || rect.h < MIN_DRAG) {
       cancel(); // 误触：整个操作取消
@@ -102,6 +115,13 @@ window.addEventListener('pointerup', () => {
     enterAdjust();
   }
   active = null;
+});
+
+window.addEventListener('pointercancel', (e) => {
+  // 指针被系统接管（等效松手丢失）：退出拖拽态，draft 直接按取消收敛
+  releaseCapture(e);
+  active = null;
+  if (phase === 'draft') cancel();
 });
 
 window.addEventListener('keydown', (e) => {
@@ -117,9 +137,9 @@ window.addEventListener('contextmenu', (e) => {
 confirmBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 confirmBtn.addEventListener('click', confirm);
 
-invoke<OverlayInit>('overlay_ready', { label }).then((payload) => {
+report('overlay_ready', invoke<OverlayInit>('overlay_ready', { label }).then((payload) => {
   init = payload;
   const dpr = window.devicePixelRatio;
   bounds = { x: 0, y: 0, w: init.monitor.width / dpr, h: init.monitor.height / dpr };
   render();
-});
+}));
