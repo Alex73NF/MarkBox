@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
@@ -5,15 +6,27 @@ use tauri::{
 
 use crate::commands::{MonitorRect, OverlayInit};
 
+/// 圈选互斥标记的 RAII 复位：无论正常返回还是 panic 展开都恢复 false，防止标记滞留后圈选永久静默失效
+struct SelectingGuard<'a>(&'a Mutex<bool>);
+
+impl Drop for SelectingGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap() = false;
+    }
+}
+
 pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<crate::AppState>();
     {
         let mut selecting = state.selecting.lock().unwrap();
-        if *selecting {
-            return Ok(()); // 已在圈选中则忽略，防止重复唤起（按钮双击/主窗口+托盘并发）
+        // 创建进行中（selecting）或覆盖层会话仍存活（草稿/调整阶段）都视为已在圈选中：
+        // 静默忽略，防止按钮双击/主窗口+托盘并发重复唤起，也防再次 build 撞 label 拆掉进行中的选区
+        if *selecting || app.webview_windows().keys().any(|l| l.starts_with("overlay-")) {
+            return Ok(());
         }
         *selecting = true;
     }
+    let _guard = SelectingGuard(&state.selecting);
     let result = (|| -> tauri::Result<()> {
         // 先枚举显示器再隐主窗口：枚举失败不能把用户丢在黑屏里
         let infos: Vec<(String, MonitorRect)> = app
@@ -73,7 +86,6 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
         end_selection(app);
         show_main(app);
     }
-    *state.selecting.lock().unwrap() = false;
     result
 }
 
