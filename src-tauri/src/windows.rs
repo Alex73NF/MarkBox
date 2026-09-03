@@ -25,18 +25,7 @@ pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     }
     let mut infos = Vec::new();
     for (i, m) in app.available_monitors()?.iter().enumerate() {
-        let label = format!("overlay-{i}");
-        let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("overlay.html".into()))
-            .title("markbox-overlay")
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .build()?;
-        win.set_position(Position::Physical(*m.position()))?;
-        win.set_size(Size::Physical(*m.size()))?;
-        infos.push((label, MonitorInfo {
+        infos.push((format!("overlay-{i}"), MonitorInfo {
             x: m.position().x,
             y: m.position().y,
             width: m.size().width,
@@ -44,8 +33,23 @@ pub fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             scale_factor: m.scale_factor(),
         }));
     }
+    // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪
     if let Some(state) = app.try_state::<crate::AppState>() {
-        *state.monitors.lock().unwrap() = infos;
+        *state.monitors.lock().unwrap() = infos.clone();
+    }
+    for (label, info) in &infos {
+        let win = WebviewWindowBuilder::new(app, label.as_str(), WebviewUrl::App("overlay.html".into()))
+            .title("markbox-overlay")
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .visible(false)
+            .build()?;
+        win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
+        win.set_size(Size::Physical(PhysicalSize::new(info.width, info.height)))?;
+        win.show()?;
     }
     Ok(())
 }
@@ -60,18 +64,34 @@ pub fn end_selection(app: &AppHandle) {
 
 pub fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
     destroy_mark(app);
-    let win = WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
-        .title("markbox-mark")
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .focusable(false)
-        .resizable(false)
-        .build()?;
+    let build = || {
+        WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
+            .title("markbox-mark")
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focusable(false)
+            .resizable(false)
+            .visible(false)
+            .build()
+    };
+    // 防回车重复确认的并发残余：build 失败且 "mark" 仍存在（上一次异步 destroy 未完成）
+    // → 再销毁一次并重试一次，仍失败才向上抛错
+    let win = match build() {
+        Ok(win) => win,
+        Err(build_err) => {
+            if app.get_webview_window("mark").is_none() {
+                return Err(build_err);
+            }
+            destroy_mark(app);
+            build()?
+        }
+    };
     win.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
     win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
     win.set_ignore_cursor_events(true)?;
+    win.show()?;
     let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": true }));
     Ok(())
 }

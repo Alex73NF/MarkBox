@@ -44,6 +44,8 @@ pub fn run() {
         }))
         .setup(|app| {
             let loaded = settings::load_from(&settings_path(app.handle()));
+            // 回写默认值：重建缺失/损坏的配置文件并持久化归一化结果
+            let _ = settings::save_to(&settings_path(app.handle()), &loaded);
             app.manage(AppState { settings: Mutex::new(loaded), monitors: Mutex::default() });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
@@ -65,7 +67,6 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let _ = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false }));
             Ok(())
         })
         .on_window_event(|window, event| match event {

@@ -9,7 +9,7 @@ const label = getCurrentWebviewWindow().label;
 
 let init: OverlayInit;                                // 本屏物理几何
 let bounds: Rect;                                     // 本屏 CSS 像素边界 {0,0,w,h}
-let phase: 'idle' | 'draft' | 'adjust' = 'idle';
+let phase: 'idle' | 'draft' | 'adjust' | 'closing' = 'idle';
 let rect: Rect = { x: 0, y: 0, w: 0, h: 0 };
 let dragStart = { x: 0, y: 0 };
 let active: { kind: 'move'; base: Rect } | { kind: 'resize'; handle: Handle; base: Rect } | null = null;
@@ -18,8 +18,13 @@ const sel = document.getElementById('sel')!;
 const size = document.getElementById('size')!;
 const confirmBtn = document.getElementById('confirm')!;
 
-const cancel = () => invoke('cancel_selection');
+const cancel = () => {
+  if (phase === 'closing') return; // 确认已触发、teardown 进行中，忽略 Esc/右键
+  invoke('cancel_selection');
+};
 const confirm = () => {
+  if (phase !== 'adjust') return; // 防回车连发/按钮双击重复确认
+  phase = 'closing';
   const dpr = window.devicePixelRatio;
   const phys: PhysRect = {
     x: init.monitor.x + Math.round(rect.x * dpr),
