@@ -77,8 +77,11 @@ pub(crate) fn start_selection(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub(crate) fn overlay_ready(app: AppHandle, label: String) -> Result<OverlayInit, String> {
-    windows::overlay_init(&app, &label).ok_or_else(|| format!("未知的覆盖层标签: {label}"))
+pub(crate) fn overlay_ready(app: AppHandle, state: tauri::State<AppState>, label: String) -> Result<OverlayInit, String> {
+    let init = windows::overlay_init(&app, &label).ok_or_else(|| format!("未知的覆盖层标签: {label}"))?;
+    // 标记就绪供圈选看门狗判定（见 windows.rs spawn_ready_watchdog）
+    state.ready_overlays.lock().unwrap().insert(label);
+    Ok(init)
 }
 
 #[tauri::command]

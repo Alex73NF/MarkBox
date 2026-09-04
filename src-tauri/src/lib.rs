@@ -22,6 +22,8 @@ pub(crate) struct AppState {
     // 当前圈选命令与 Destroyed 事件都在主线程串行执行，代次读写实际单线程，Relaxed 即正确；
     // 若未来把圈选命令 async 化，需改用 Acquire/Release 建立跨线程可见性
     pub(crate) selection_gen: AtomicU64,
+    // 已就绪（overlay_ready 已到）的覆盖层：圈选看门狗据此发现"窗口在而前端死"的会话（windows.rs）
+    pub(crate) ready_overlays: Mutex<std::collections::HashSet<String>>,
 }
 
 pub fn run() {
@@ -45,6 +47,7 @@ pub fn run() {
                 monitors: Mutex::default(),
                 selecting: Mutex::default(),
                 selection_gen: AtomicU64::new(0),
+                ready_overlays: Mutex::default(),
             });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
@@ -84,6 +87,15 @@ pub fn run() {
             commands::start_selection, commands::overlay_ready,
             commands::confirm_selection, commands::cancel_selection, commands::clear_mark
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, _event| {
+            // macOS：主窗隐藏（圈选确认/关闭到托盘）后，点 Dock 图标/应用图标触发 Reopen，
+            // 唤回主窗。忽略 has_visible_windows——标记窗可见时系统也报 true，而主窗仍需唤回。
+            // 参数名带下划线：Windows 侧不处理运行事件，也不产生未使用警告
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                windows::show_main(_app);
+            }
+        });
 }

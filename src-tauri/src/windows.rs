@@ -44,8 +44,10 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             return Err(tauri::Error::Io(std::io::Error::other("没有可用显示器")));
         }
         hide_main(app);
-        // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪
+        // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪；
+        // 就绪集合同步清空，看门狗只统计本会话的 overlay_ready
         *state.monitors.lock().unwrap() = infos.clone();
+        state.ready_overlays.lock().unwrap().clear();
         // 创建代次快照：此后 end_selection 一旦递增即说明本会话已被取消/确认，循环要静默收场
         let gen = state.selection_gen.load(Ordering::Relaxed);
         let cursor = app.cursor_position().ok();
@@ -82,6 +84,7 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
         if let Some(win) = focus_target.or(last) {
             logging::log_err("overlay 设置键盘焦点失败", win.set_focus());
         }
+        spawn_ready_watchdog(app, gen, &infos);
         Ok(())
     })();
     if result.is_err() {
@@ -92,6 +95,32 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     result
 }
 
+/// 就绪看门狗：窗口已 show 而 overlay_ready 一直未到（webview 崩溃/脚本未执行）时，
+/// 覆盖层是无退出通道的全屏输入拦截层——超时自动收场并还原主窗。
+/// 代次快照防误伤：会话正常结束（取消/确认/兜底）后 gen 已变，直接退出。
+/// 注意就绪与退出监听的因果：overlay_ready 在 overlay.ts 模块末尾才发起，
+/// 监听注册（模块顶部）必然先于它——"未就绪"即"监听不存在"，看门狗正是为此而设
+fn spawn_ready_watchdog(app: &AppHandle, gen: u64, infos: &[(String, MonitorRect)]) {
+    let handle = app.clone();
+    let expected: Vec<String> = infos.iter().map(|(l, _)| l.clone()).collect();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let state = handle.state::<crate::AppState>();
+        if state.selection_gen.load(Ordering::Relaxed) != gen {
+            return;
+        }
+        let ready = state.ready_overlays.lock().unwrap();
+        let stuck: Vec<&String> = expected.iter().filter(|l| !ready.contains(*l)).collect();
+        drop(ready);
+        if stuck.is_empty() {
+            return;
+        }
+        logging::log_error(&format!("覆盖层 {stuck:?} 5 秒未就绪（前端未加载？），圈选自动收场"));
+        end_selection(&handle);
+        show_main(&handle);
+    });
+}
+
 /// 隐藏主窗口（圈选启动/关闭到托盘共用）
 pub(crate) fn hide_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -99,7 +128,7 @@ pub(crate) fn hide_main(app: &AppHandle) {
     }
 }
 
-/// 显示并聚焦主窗口（单实例二次唤起 / 托盘 / 圈选失败恢复共用）
+/// 显示并聚焦主窗口（单实例二次唤起 / 托盘 / macOS Dock 图标 Reopen / 圈选失败恢复共用）
 pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         logging::log_err("显示主窗口失败", w.show());

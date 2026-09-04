@@ -10,7 +10,8 @@ import { report } from '../shared/report';
 const MIN_DRAG = 5;                                   // 松手时小于此值视为误触
 const MIN_SIZE = { w: 10, h: 10 };                    // 手柄调整的最小尺寸
 const CONFIRM_BTN_FALLBACK = { w: 84, h: 30 };        // 按钮进入调整态前的估算值（进入后以实测为准）
-const label = getCurrentWebviewWindow().label;
+// label 惰性求值（在文件末尾 invoke 处读取）：模块顶部读取依赖 __TAURI_INTERNALS__，
+// 会成为退出监听注册之前唯一的模块级抛出点，把整个模块打死后退出通道全灭
 
 let init: OverlayInit;                                // 本屏物理几何
 let bounds: Rect;                                     // 本屏 CSS 像素边界 {0,0,w,h}
@@ -23,20 +24,25 @@ let btnH = CONFIRM_BTN_FALLBACK.h;
 
 function cancel() {
   if (phase === 'closing') return; // 确认/取消已触发、窗口收尾进行中，忽略重复 Esc/右键
-  // 与 confirm 对称进入 closing：destroy 是异步窗口期，期间屏蔽 Enter/✓，
-  // 防同帧 Esc+Enter 连按在取消后仍确认出框。
-  // closing 是一次性锁存：两条命令的业务失败面都伴随覆盖层销毁，仅剩 IPC 整体故障会让窗口滞留，
-  // 届时应用本身已在退出边缘
+  // 进入 closing 屏蔽同帧后续 Enter/✓（防同帧 Esc+Enter 在取消后仍确认出框）；
+  // invoke 失败时回退相位保留重试通道——业务失败面都伴随覆盖层销毁，回退仅对 IPC 瞬时故障有意义
+  const from = phase;
   phase = 'closing';
-  report('cancel_selection', invoke('cancel_selection'));
+  invoke('cancel_selection').catch((err) => {
+    console.error('[markbox:cancel_selection]', err);
+    phase = from;
+  });
 }
 
 function confirm() {
   if (phase !== 'adjust') return; // 防回车连发/按钮双击重复确认
   phase = 'closing';
-  report('confirm_selection', invoke('confirm_selection', {
+  invoke('confirm_selection', {
     payload: { rect: toPhys(rect, init.monitor, window.devicePixelRatio) } satisfies ConfirmPayload,
-  }));
+  }).catch((err) => {
+    console.error('[markbox:confirm_selection]', err);
+    phase = 'adjust'; // 后端 Err 路径已销毁覆盖层；回退仅对 IPC 瞬时故障的自救有意义
+  });
 }
 
 // 先注册两条不依赖 DOM 元素与初始化结果的退出通道：即使下方元素查找或 overlay_ready 失败，
@@ -147,7 +153,7 @@ window.addEventListener('pointercancel', (e) => {
 confirmBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 confirmBtn.addEventListener('click', confirm);
 
-invoke<OverlayInit>('overlay_ready', { label })
+invoke<OverlayInit>('overlay_ready', { label: getCurrentWebviewWindow().label })
   .then((payload) => {
     init = payload;
     bounds = cssBounds(init.monitor, window.devicePixelRatio);
@@ -156,6 +162,6 @@ invoke<OverlayInit>('overlay_ready', { label })
   .catch((err) => {
     console.error('[markbox:overlay_ready]', err);
     // 拿不到本屏几何即不可用：自愈式整单取消（否则只剩一块吞点击的全屏暗层）；
-    // 若 IPC 整体故障连取消也发不出，Esc/右键通道随应用退出而终
+    // 若 IPC 整体故障连取消也发不出，Rust 侧 5 秒就绪看门狗会兜底收场
     report('cancel_selection', invoke('cancel_selection'));
   });
