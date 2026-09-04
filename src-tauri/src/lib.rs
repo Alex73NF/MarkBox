@@ -19,8 +19,8 @@ pub(crate) struct AppState {
     pub(crate) monitors: Mutex<Vec<(String, MonitorRect)>>,
     pub(crate) selecting: Mutex<bool>,
     // 圈选创建代次：end_selection（取消/确认/兜底销毁）递增，创建循环据此发现会话已被取消并静默中止。
-    // 当前圈选命令与 Destroyed 事件都在主线程串行执行，代次读写实际单线程，Relaxed 即正确；
-    // 若未来把圈选命令 async 化，需改用 Acquire/Release 建立跨线程可见性
+    // 圈选命令为规避 Windows 主线程创建窗口死锁（wry#583，见 commands.rs 文件头）已 async 化，
+    // 代次读写跨越线程池/主线程/看门狗线程：增量用 AcqRel、载入用 Acquire 建立跨线程可见性
     pub(crate) selection_gen: AtomicU64,
     // 已就绪（overlay_ready 已到）的覆盖层：圈选看门狗据此发现"窗口在而前端死"的会话（windows.rs）
     pub(crate) ready_overlays: Mutex<std::collections::HashSet<String>>,

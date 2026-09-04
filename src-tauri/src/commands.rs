@@ -42,9 +42,14 @@ pub(crate) struct ConfirmPayload { pub rect: PhysRect }
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MarkState { pub has_mark: bool }
 
-// 设置读写含磁盘 IO，必须移出主线程：同步命令在主线程执行，写盘期间会冻结托盘与全部窗口；
-// async 属性使其转到运行时线程池执行，锁语义不变。
-// 圈选/确认/取消等窗口操作命令保持同步（主线程串行），窗口创建/销毁时序才确定。
+// 命令线程模型（Windows 限制是第一约束）：
+// 1. 同步命令与托盘/菜单事件回调都在主线程执行，而 Windows 主线程上创建 WebView 窗口会死锁
+//    （wry#583，tauri 对 WebviewWindowBuilder 的官方文档警告）。因此所有创建窗口的命令
+//    （start_selection 建 overlay、confirm_selection 建标记窗）必须 async：命令转到运行时
+//    线程池执行，窗口创建/定位/显示经事件循环代理按投递顺序（FIFO）串行生效，时序仍确定。
+// 2. 设置读写含磁盘 IO，同样 async 移出主线程，避免写盘冻结托盘与全部窗口。
+// 3. 取消/清除/就绪上报只读状态或只销毁窗口：destroy 本身就是向事件循环投递消息、
+//    任意线程可安全调用，保持同步无死锁面。
 #[tauri::command(async)]
 pub(crate) fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
     lock_settings(&state).clone()
@@ -71,7 +76,8 @@ fn lock_settings<'a>(state: &'a tauri::State<'_, AppState>) -> std::sync::MutexG
     state.settings.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[tauri::command]
+// async：本命令创建 overlay 窗口，Windows 主线程内创建会死锁（见文件头注释 1）
+#[tauri::command(async)]
 pub(crate) fn start_selection(app: AppHandle) -> Result<(), String> {
     windows::begin_selection(&app).map_err(|e| e.to_string())
 }
@@ -84,7 +90,8 @@ pub(crate) fn overlay_ready(app: AppHandle, state: tauri::State<AppState>, label
     Ok(init)
 }
 
-#[tauri::command]
+// async：确认链路要创建标记窗，同 start_selection 的 Windows 死锁规避（见文件头注释 1）
+#[tauri::command(async)]
 pub(crate) fn confirm_selection(app: AppHandle, payload: ConfirmPayload) -> Result<(), String> {
     let r = &payload.rect;
     let ok = windows::rect_on_existing_monitor(&app, r.x, r.y, r.w, r.h);
@@ -117,7 +124,14 @@ pub(crate) fn clear_mark(app: AppHandle) {
 /// 托盘菜单事件分发用
 pub(crate) fn handle_tray(app: &AppHandle, id: &str) {
     match id {
-        "select" => logging::log_err("发起圈选失败", windows::begin_selection(app)),
+        "select" => {
+            // 托盘菜单事件同样在主线程派发，直接创建窗口触发同一死锁（wry#583）：
+            // 移到运行时阻塞线程池发起，错误在线程内记日志（与按钮路径共用 begin_selection）
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                logging::log_err("发起圈选失败", windows::begin_selection(&app));
+            });
+        }
         "clear" => clear_mark(app.clone()),
         "show" => windows::show_main(app),
         "quit" => app.exit(0),

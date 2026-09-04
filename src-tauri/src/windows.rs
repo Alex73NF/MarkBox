@@ -48,8 +48,10 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
         // 就绪集合同步清空，看门狗只统计本会话的 overlay_ready
         *state.monitors.lock().unwrap() = infos.clone();
         state.ready_overlays.lock().unwrap().clear();
-        // 创建代次快照：此后 end_selection 一旦递增即说明本会话已被取消/确认，循环要静默收场
-        let gen = state.selection_gen.load(Ordering::Relaxed);
+        // 创建代次快照：此后 end_selection 一旦递增即说明本会话已被取消/确认，循环要静默收场。
+        // 圈选命令已 async 化（Windows 主线程创建窗口死锁，见 commands.rs 文件头），
+        // 本函数运行在线程池而 end_selection 可能在主线程/看门狗线程，Acquire 配对增量侧的 AcqRel
+        let gen = state.selection_gen.load(Ordering::Acquire);
         let cursor = app.cursor_position().ok();
         let mut last: Option<WebviewWindow> = None;
         let mut focus_target: Option<WebviewWindow> = None;
@@ -65,7 +67,7 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
                 .build()?;
             // 多屏逐个 build 期间用户已在先建的屏上取消/确认（spec：任何阶段取消都不留框）：
             // 销毁刚建出的窗口并中止，不再把后续屏幕的覆盖层弹给已取消的用户
-            if state.selection_gen.load(Ordering::Relaxed) != gen {
+            if state.selection_gen.load(Ordering::Acquire) != gen {
                 logging::log_err(&format!("销毁 {label} 失败"), win.destroy());
                 return Ok(());
             }
@@ -106,7 +108,7 @@ fn spawn_ready_watchdog(app: &AppHandle, gen: u64, infos: &[(String, MonitorRect
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(5));
         let state = handle.state::<crate::AppState>();
-        if state.selection_gen.load(Ordering::Relaxed) != gen {
+        if state.selection_gen.load(Ordering::Acquire) != gen {
             return;
         }
         let ready = state.ready_overlays.lock().unwrap();
@@ -137,9 +139,10 @@ pub(crate) fn show_main(app: &AppHandle) {
 }
 
 pub(crate) fn end_selection(app: &AppHandle) {
-    // 先递增代次再销毁：正在逐屏 build 的 begin_selection 据此发现会话已被取消并停止续建
+    // 先递增代次再销毁：正在逐屏 build 的 begin_selection 据此发现会话已被取消并停止续建。
+    // AcqRel：增量侧释放，配对 begin_selection/看门狗的 Acquire 载入，保证跨线程可见
     let state = app.state::<crate::AppState>();
-    state.selection_gen.fetch_add(1, Ordering::Relaxed);
+    state.selection_gen.fetch_add(1, Ordering::AcqRel);
     for (label, win) in app.webview_windows() {
         if label.starts_with("overlay-") {
             logging::log_err(&format!("销毁 {label} 失败"), win.destroy());
