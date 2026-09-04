@@ -1,0 +1,5 @@
+# 全库统一 LF，防 Windows 协作时 CRLF 混入造成全文件 diff 噪音
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

@@ -32,6 +32,13 @@ describe('applyResize', () => {
     const out = applyResize(r, 's', 0, -500, MIN, B);
     expect(out.h).toBe(10);
   });
+  // 退化区间（选区 < 最小尺寸且贴屏缘，钳制上下界反序）：屏幕边界优先于最小尺寸，选区不出屏
+  it('w 手柄：贴左缘的小于最小宽选区不出屏', () => {
+    expect(applyResize({ x: 0, y: 0, w: 6, h: 6 }, 'w', 2, 0, MIN, B)).toEqual({ x: 0, y: 0, w: 6, h: 6 });
+  });
+  it('n 手柄：贴顶缘的小于最小高选区不出屏', () => {
+    expect(applyResize({ x: 0, y: 0, w: 6, h: 6 }, 'n', 0, 2, MIN, B)).toEqual({ x: 0, y: 0, w: 6, h: 6 });
+  });
 });
 
 describe('applyMove', () => {

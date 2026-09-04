@@ -9,8 +9,9 @@ concurrency:
 jobs:
   build-windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 版本单源化守卫：tag 必须等于 Cargo.toml 的包版本（版本唯一权威源），防漂移发错版本
       - name: 校验 tag 与 Cargo.toml 版本一致
         shell: pwsh
@@ -21,35 +22,37 @@ jobs:
           $v = $m.Matches[0].Groups[1].Value
           if ($env:TAG -ne "v$v") { throw "tag $($env:TAG) 与 src-tauri/Cargo.toml 包版本 v$v 不一致" }
       # pnpm 版本取自 package.json 的 packageManager 字段
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: pnpm }
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
-      # vitest 不做类型检查：tsc 错误必须在产出发布物之前暴露
-      - run: pnpm build
+      # vitest 不做类型检查：tsc 错误必须在产出发布物之前暴露（vite 构建由下方 tauri build 的 beforeBuildCommand 执行一次，不重复）
+      - run: pnpm exec tsc --noEmit
       - name: Rust 测试
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --locked
       - name: Rust lint
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - run: pnpm tauri build
       - name: 打包免安装版
         shell: pwsh
-        run: Compress-Archive -Path src-tauri/target/release/markbox.exe -DestinationPath markbox-portable.zip
-      - uses: actions/upload-artifact@v4
+        env:
+          TAG: ${{ github.ref_name }}
+        run: Compress-Archive -Path src-tauri/target/release/markbox.exe -DestinationPath "markbox-$($env:TAG)-portable.zip"
+      - uses: actions/upload-artifact@v7
         with:
           name: markbox-windows
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
-            markbox-portable.zip
-      - uses: softprops/action-gh-release@v2
+            markbox-v*-portable.zip
+      - uses: softprops/action-gh-release@v3
         with:
           fail_on_unmatched_files: true
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
-            markbox-portable.zip
+            markbox-v*-portable.zip

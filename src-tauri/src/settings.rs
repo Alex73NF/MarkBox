@@ -10,10 +10,10 @@ static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct Settings {
     pub border_color: String,
-    // u16 而非 u8：手改 JSON 写入 300 这类超范围值时先反序列化成功、再由 normalize 钳制，
-    // 而不是 u8 解析失败导致整个文件回退默认
-    pub border_width: u16,
-    pub border_radius: u16,
+    // i32 而非 u8/u16：手改 JSON 写入 300 或 -5 这类超范围值时先反序列化成功、再由 normalize 钳制，
+    // 而不是无符号窄类型解析失败导致整个文件回退默认
+    pub border_width: i32,
+    pub border_radius: i32,
 }
 
 impl Default for Settings {
@@ -49,6 +49,7 @@ pub(crate) fn load_or_repair(path: &Path) -> (Settings, bool) {
 }
 
 pub(crate) fn save_to(path: &Path, s: &Settings) -> std::io::Result<()> {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -59,7 +60,10 @@ pub(crate) fn save_to(path: &Path, s: &Settings) -> std::io::Result<()> {
         std::process::id(),
         TMP_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&tmp, serde_json::to_string_pretty(s).expect("settings serialize"))?;
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(serde_json::to_string_pretty(s).expect("settings serialize").as_bytes())?;
+    // 改名前先刷盘：rename 只保证进程崩溃安全，断电/系统崩溃时改名元数据可能先于数据块落盘
+    f.sync_all()?;
     std::fs::rename(&tmp, path)
 }
 
@@ -112,6 +116,10 @@ mod tests {
         let hi = normalize(&Settings { border_color: "#FF4D4F".into(), border_width: 300, border_radius: 300 });
         assert_eq!(hi.border_width, 10);
         assert_eq!(hi.border_radius, 16);
+        // 负值同样先读入再钳制（i32 化的意义），而不是反序列化失败回退默认
+        let neg = normalize(&Settings { border_color: "#FF4D4F".into(), border_width: -5, border_radius: -1 });
+        assert_eq!(neg.border_width, 1);
+        assert_eq!(neg.border_radius, 0);
     }
 
     #[test]
@@ -160,6 +168,18 @@ mod tests {
         let (s, needs_repair) = load_or_repair(&p);
         assert_eq!(s.border_color, "#00C2FF");
         assert_eq!(s.border_width, 10);
+        assert!(!needs_repair);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn negative_width_parses_and_clamps_instead_of_repair() {
+        // 负值同样不该触发整文件回退（i32 + normalize 钳制）
+        let p = tmp_path("negative");
+        std::fs::write(&p, r##"{ "borderColor": "#00C2FF", "borderWidth": -5, "borderRadius": 0 }"##).unwrap();
+        let (s, needs_repair) = load_or_repair(&p);
+        assert_eq!(s.border_color, "#00C2FF");
+        assert_eq!(s.border_width, 1);
         assert!(!needs_repair);
         let _ = std::fs::remove_file(&p);
     }

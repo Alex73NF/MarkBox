@@ -22,12 +22,20 @@ pub(crate) struct PhysRect { pub x: i32, pub y: i32, pub w: u32, pub h: u32 }
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConfirmPayload { pub rect: PhysRect }
 
-#[tauri::command]
+/// mark-state 事件载荷（Rust 侧唯一契约来源，与前端 MarkState 接口字段对齐）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MarkState { pub has_mark: bool }
+
+// 设置读写含磁盘 IO，必须移出主线程：同步命令在主线程执行，写盘期间会冻结托盘与全部窗口；
+// async 属性使其转到运行时线程池执行，锁语义不变。
+// 圈选/确认/取消等窗口操作命令保持同步（主线程串行），窗口创建/销毁时序才确定。
+#[tauri::command(async)]
 pub(crate) fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
     state.settings.lock().unwrap().clone()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub(crate) fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: settings::Settings) -> Result<settings::Settings, String> {
     let normalized = settings::normalize(&settings);
     // 写盘与内存提交在同一把锁内串行：并发 saveNow 交错时保证内存 == 磁盘，
@@ -78,7 +86,7 @@ pub(crate) fn cancel_selection(app: AppHandle) {
 pub(crate) fn clear_mark(app: AppHandle) {
     windows::destroy_mark(&app);
     // destroy 在事件循环异步生效，事后查询会拿到过期状态，直接广播已知结果
-    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": false })) {
+    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: false }) {
         eprintln!("[markbox] 发送 mark-state 失败: {e}");
     }
 }

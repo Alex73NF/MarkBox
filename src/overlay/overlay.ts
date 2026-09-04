@@ -26,7 +26,10 @@ const size = document.getElementById('size')!;
 const confirmBtn = document.getElementById('confirm')!;
 
 const cancel = () => {
-  if (phase === 'closing') return; // 确认已触发、teardown 进行中，忽略 Esc/右键
+  if (phase === 'closing') return; // 确认/取消已触发、teardown 进行中，忽略重复 Esc/右键
+  // 与 confirm 对称进入 closing：destroy 是异步窗口期，期间屏蔽 Enter/✓，
+  // 防同帧 Esc+Enter 连按在取消后仍确认出框
+  phase = 'closing';
   report('cancel_selection', invoke('cancel_selection'));
 };
 const confirm = () => {
@@ -51,13 +54,16 @@ function render() {
   size.style.display = rect.w === 0 || rect.h === 0 ? 'none' : ''; // 0×0（尚未拖出）不显示尺寸标签
   size.textContent = `${Math.round(rect.w * dpr)} × ${Math.round(rect.h * dpr)}`;
   size.style.top = rect.y < SIZE_FLIP_Y ? '4px' : `-${LABEL_H}px`;
-  // 确认按钮：框右下角外侧，贴底翻到框上方（贴顶翻不动时收进框内），贴右收到框内
+  // 贴右时标签右缘对齐屏幕右缘（负值=向左移进屏内），常规情况 left 归 0
+  size.style.left = `${Math.min(0, bounds.w - rect.x - size.offsetWidth)}px`;
+  // 确认按钮：框右下角外侧，贴底翻到框上方（贴顶翻不动时收进框内），贴右收进框内右下；
+  // 贴右且窄于按钮时右缘对齐屏幕右缘（bx 可为负=移到框左外侧），保证按钮完整可见
   let bx = rect.w + GAP;
-  if (rect.x + rect.w + btnW > bounds.w) bx = rect.w - btnW;
+  if (rect.x + rect.w + btnW > bounds.w) bx = Math.min(rect.w, bounds.w - rect.x) - btnW;
   let by = rect.h + GAP;
   if (rect.y + rect.h + btnH > bounds.h) by = -btnH - GAP;
   if (rect.y + by < 0) by = GAP; // 贴顶翻转也会越出窗口时收进框内
-  confirmBtn.style.left = `${Math.max(0, bx)}px`;
+  confirmBtn.style.left = `${bx}px`;
   confirmBtn.style.top = `${by}px`;
 }
 
@@ -73,6 +79,9 @@ function enterAdjust() {
 window.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   if (!init) return; // overlay_ready 未返回前 bounds 未就绪，不响应
+  // 触屏多指已知取舍：不按 pointerId 归属手势。draft 中第二指按下视为重新起拖
+  // （兼作指针事件丢失的自恢复出口，占用 pointerId 会把它堵死）；adjust 中第二指
+  // 会顶替 active，行为有界。鼠标单指针为主用场景，不为触屏引入额外状态机。
   const target = e.target as HTMLElement;
   if (phase === 'idle' || phase === 'draft') {
     // draft 中再次按下视为重新起拖（指针事件万一丢失时的自恢复出口）

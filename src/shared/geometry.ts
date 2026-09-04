@@ -8,14 +8,17 @@ export function normalizeDrag(sx: number, sy: number, cx: number, cy: number): R
   return { x: Math.min(sx, cx), y: Math.min(sy, cy), w: Math.abs(cx - sx), h: Math.abs(cy - sy) };
 }
 
-/** 手柄拖动：对边锚定，强制 min 尺寸并钳制在 max（屏幕）内 */
+/** 手柄拖动：对边锚定，强制 min 尺寸并钳制在 max（屏幕）内。
+ *  屏幕边界优先：选区暂小于 min（误触微拖后即松手进入调整态）且贴屏缘时，w/n 手柄的
+ *  钳制区间会退化为 lo > hi，此时屏幕边界先于最小尺寸生效，防止把选区顶出屏幕；
+ *  非退化输入下与「先钳 min 后钳 max」逐位等价 */
 export function applyResize(r: Rect, handle: Handle, dx: number, dy: number, min: { w: number; h: number }, max: Rect): Rect {
   const a = { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h };
   let { left, top, right, bottom } = a;
-  if (handle.includes('w')) left = clamp(a.left + dx, max.x, a.right - min.w);
-  if (handle.includes('e')) right = clamp(a.right + dx, a.left + min.w, max.x + max.w);
-  if (handle.includes('n')) top = clamp(a.top + dy, max.y, a.bottom - min.h);
-  if (handle.includes('s')) bottom = clamp(a.bottom + dy, a.top + min.h, max.y + max.h);
+  if (handle.includes('w')) left = Math.max(max.x, Math.min(a.left + dx, a.right - min.w));
+  if (handle.includes('e')) right = Math.min(max.x + max.w, Math.max(a.right + dx, a.left + min.w));
+  if (handle.includes('n')) top = Math.max(max.y, Math.min(a.top + dy, a.bottom - min.h));
+  if (handle.includes('s')) bottom = Math.min(max.y + max.h, Math.max(a.bottom + dy, a.top + min.h));
   return { x: left, y: top, w: right - left, h: bottom - top };
 }
 

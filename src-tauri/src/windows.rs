@@ -5,7 +5,7 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder,
 };
 
-use crate::commands::{MonitorRect, OverlayInit};
+use crate::commands::{MarkState, MonitorRect, OverlayInit};
 
 /// 圈选互斥标记的 RAII 复位：无论正常返回还是 panic 展开都恢复 false，防止标记滞留后圈选永久静默失效
 struct SelectingGuard<'a>(&'a Mutex<bool>);
@@ -159,7 +159,7 @@ pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tau
     win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
     win.set_ignore_cursor_events(true)?;
     win.show()?;
-    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": true })) {
+    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: true }) {
         eprintln!("[markbox] 发送 mark-state 失败: {e}");
     }
     Ok(())
@@ -178,7 +178,7 @@ pub(crate) fn mark_exists(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn emit_mark_state(app: &AppHandle) {
-    if let Err(e) = app.emit_to("main", "mark-state", serde_json::json!({ "hasMark": mark_exists(app) })) {
+    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: mark_exists(app) }) {
         eprintln!("[markbox] 发送 mark-state 失败: {e}");
     }
 }
@@ -186,10 +186,27 @@ pub(crate) fn emit_mark_state(app: &AppHandle) {
 /// 显示器热插拔保护：确认时 rect 必须仍落在某个现存显示器上
 pub(crate) fn rect_on_existing_monitor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> bool {
     let Ok(monitors) = app.available_monitors() else { return false };
+    let rects: Vec<MonitorRect> = monitors
+        .iter()
+        .map(|m| MonitorRect {
+            x: m.position().x,
+            y: m.position().y,
+            width: m.size().width,
+            height: m.size().height,
+        })
+        .collect();
+    rect_intersects_any_monitor(x, y, w, h, &rects)
+}
+
+/// 判定物理矩形是否与任一显示器相交（含负原点屏）。i64 运算：ConfirmPayload 是唯一未经
+/// 后端校验的数值入口，u32 尺寸 as i32 可回绕成负值、直接相加在 release（无 overflow-checks）
+/// 下可溢出，统一升宽消除；0 尺寸显式拒绝（原先靠相交判定隐式排除）
+pub(crate) fn rect_intersects_any_monitor(x: i32, y: i32, w: u32, h: u32, monitors: &[MonitorRect]) -> bool {
+    let (x, y, w, h) = (i64::from(x), i64::from(y), i64::from(w), i64::from(h));
     monitors.iter().any(|m| {
-        let (mx, my) = (m.position().x, m.position().y);
-        let (mw, mh) = (m.size().width as i32, m.size().height as i32);
-        x < mx + mw && x + w as i32 > mx && y < my + mh && y + h as i32 > my
+        let (mx, my) = (i64::from(m.x), i64::from(m.y));
+        let (mw, mh) = (i64::from(m.width), i64::from(m.height));
+        w > 0 && h > 0 && x < mx + mw && x + w > mx && y < my + mh && y + h > my
     })
 }
 
@@ -197,4 +214,56 @@ pub(crate) fn overlay_init(app: &AppHandle, label: &str) -> Option<OverlayInit> 
     let state = app.try_state::<crate::AppState>()?;
     let monitors = state.monitors.lock().unwrap();
     monitors.iter().find(|(l, _)| l == label).map(|(_, info)| OverlayInit { monitor: *info })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rect_intersects_any_monitor;
+    use crate::commands::MonitorRect;
+
+    fn monitor(x: i32, y: i32, w: u32, h: u32) -> MonitorRect {
+        MonitorRect { x, y, width: w, height: h }
+    }
+
+    #[test]
+    fn rect_inside_monitor_intersects() {
+        let ms = [monitor(0, 0, 1920, 1080)];
+        assert!(rect_intersects_any_monitor(100, 100, 50, 50, &ms));
+    }
+
+    #[test]
+    fn rect_outside_monitor_does_not_intersect() {
+        let ms = [monitor(0, 0, 1920, 1080)];
+        assert!(!rect_intersects_any_monitor(2000, 100, 50, 50, &ms));
+    }
+
+    #[test]
+    fn adjacent_edge_is_not_intersection() {
+        // 恰好贴在显示器右缘外侧：x == mx + mw，左开区间判定为不相交
+        let ms = [monitor(0, 0, 1920, 1080)];
+        assert!(!rect_intersects_any_monitor(1920, 100, 50, 50, &ms));
+    }
+
+    #[test]
+    fn negative_origin_monitor_intersects() {
+        let ms = [monitor(-1920, -200, 1920, 1080)];
+        assert!(rect_intersects_any_monitor(-1900, -180, 100, 100, &ms));
+        assert!(!rect_intersects_any_monitor(-1900, 1000, 100, 100, &ms));
+    }
+
+    #[test]
+    fn zero_size_rect_is_rejected() {
+        let ms = [monitor(0, 0, 1920, 1080)];
+        assert!(!rect_intersects_any_monitor(100, 100, 0, 100, &ms));
+        assert!(!rect_intersects_any_monitor(100, 100, 100, 0, &ms));
+    }
+
+    #[test]
+    fn extreme_values_do_not_wrap_or_overflow() {
+        // u32::MAX as i32 会回绕成 -1；i64 升宽后仅按几何事实判定（不相交）
+        let ms = [monitor(0, 0, 1920, 1080)];
+        assert!(!rect_intersects_any_monitor(i32::MAX, i32::MAX, u32::MAX, u32::MAX, &ms));
+        // 常规坐标下极端尺寸仍与屏幕相交
+        assert!(rect_intersects_any_monitor(0, 0, u32::MAX, u32::MAX, &ms));
+    }
 }

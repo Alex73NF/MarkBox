@@ -15,7 +15,9 @@ pub(crate) struct AppState {
     pub(crate) settings: Mutex<settings::Settings>,
     pub(crate) monitors: Mutex<Vec<(String, MonitorRect)>>,
     pub(crate) selecting: Mutex<bool>,
-    // 圈选创建代次：end_selection（取消/确认/兜底销毁）递增，创建循环据此发现会话已被取消并静默中止
+    // 圈选创建代次：end_selection（取消/确认/兜底销毁）递增，创建循环据此发现会话已被取消并静默中止。
+    // 当前所有命令与 Destroyed 事件都在主线程串行执行，代次读写实际单线程，Relaxed 即正确；
+    // 若未来把圈选命令 async 化，需改用 Acquire/Release 建立跨线程可见性
     pub(crate) selection_gen: AtomicU64,
 }
 

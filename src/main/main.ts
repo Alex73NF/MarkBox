@@ -29,13 +29,15 @@ report('get_settings', invoke<Settings>('get_settings').then(fillForm));
 
 /** 颜色选择等低频改动：立即保存；失败时以持久化真值回滚表单 */
 async function saveNow() {
-  saveSeq++; // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
+  const mine = ++saveSeq; // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
   try {
     fillForm(await invoke<Settings>('save_settings', { settings: readForm() }));
   } catch (err) {
     console.error('[markbox:save_settings]', err);
     try {
-      fillForm(await invoke<Settings>('get_settings'));
+      const truth = await invoke<Settings>('get_settings');
+      // 已有更新的保存落定：磁盘真值可能就是用户后续输入，别踩掉表单
+      if (mine === saveSeq) fillForm(truth);
     } catch (revertErr) {
       console.error('[markbox:get_settings]', revertErr);
     }

@@ -5,7 +5,7 @@ Windows 托盘常驻小工具：从主界面或托盘一键唤起微信截图式
 - 主窗口 / 托盘菜单：开始圈选（松开鼠标后可拉宽/拉高/移动，✓ 或回车确认）、清除标记
 - 无全局快捷键、无开机自启，所有操作都在软件界面和托盘完成
 
-状态：v0.1.0 已实现，设计见 [docs/superpowers/specs/2026-09-03-markbox-design.md](docs/superpowers/specs/2026-09-03-markbox-design.md)
+状态：已实现（版本以 [Releases](../../releases) 页为准），设计见 [docs/superpowers/specs/2026-09-03-markbox-design.md](docs/superpowers/specs/2026-09-03-markbox-design.md)
 
 ## 开发与构建
 
