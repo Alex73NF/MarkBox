@@ -5,6 +5,9 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    # 门禁只需读权限；release 调用时取 min(caller 授予, 此处声明)
+    permissions:
+      contents: read
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

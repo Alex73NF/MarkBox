@@ -1,3 +1,5 @@
+//! 应用装配：全局状态定义、启动初始化（日志/设置/托盘）、窗口事件路由与命令注册
+
 mod commands;
 mod logging;
 mod settings;

@@ -29,8 +29,11 @@ report('get_settings', invoke<Settings>('get_settings').then(fillForm));
 
 let saveTimer: number | undefined;
 let saveSeq = 0;
+// 单飞串行链：async 命令在线程池上执行，到达序 ≠ 完成序，并发保存可能让旧快照最后落盘；
+// 链上各环按发起顺序执行、且执行时才读表单，保证最后落盘的必是最新值
+let saveChain: Promise<void> = Promise.resolve();
 
-/** 保存当前表单并回填归一化结果；序号失配（已有更新的保存落定）时不回填；
+/** 保存当前表单并回填归一化结果；序号失配（已有更新的保存排队）时不回填；
  *  失败以持久化真值回滚。立即保存与防抖保存共用同一出口，失败语义一致。
  *  序号/防抖时序属手动验证项（模块含 DOM，vitest 不加载），修改时逐案核对 */
 async function persist(mine: number) {
@@ -48,16 +51,21 @@ async function persist(mine: number) {
   }
 }
 
+function enqueueSave() {
+  const mine = ++saveSeq;
+  saveChain = saveChain.then(() => persist(mine));
+}
+
 /** 颜色选择等低频改动：立即保存 */
 function saveNow() {
-  void persist(++saveSeq); // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
+  enqueueSave(); // 递增序号使在途回填失效，防止旧快照晚到回填进表单
 }
 
 /** 滑块拖动的高频 input：尾部防抖，避免每 tick 写盘和乱序回填旧值 */
 function saveDebounced() {
   syncOutputs();
   window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => { void persist(++saveSeq); }, 150);
+  saveTimer = window.setTimeout(enqueueSave, 150);
 }
 
 $<HTMLInputElement>('color').addEventListener('input', () => { void saveNow(); });

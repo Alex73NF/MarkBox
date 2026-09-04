@@ -1,3 +1,5 @@
+//! 窗口编排：圈选覆盖层的创建/销毁会话（重入与代次防护）、标记窗生命周期、显示器相交判定
+
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use tauri::{
@@ -39,7 +41,7 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             .collect();
         if infos.is_empty() {
             // 一台显示器都没有：保留主窗口并报错，别把用户丢进只剩托盘的黑屏
-            return Err(tauri::Error::Io(std::io::Error::other("no available monitors")));
+            return Err(tauri::Error::Io(std::io::Error::other("没有可用显示器")));
         }
         hide_main(app);
         // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪

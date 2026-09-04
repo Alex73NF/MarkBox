@@ -1,3 +1,5 @@
+//! IPC 边界：7 个 tauri command 的实现、前后端契约类型（serde camelCase）与托盘事件分发
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
@@ -76,7 +78,7 @@ pub(crate) fn start_selection(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) fn overlay_ready(app: AppHandle, label: String) -> Result<OverlayInit, String> {
-    windows::overlay_init(&app, &label).ok_or_else(|| format!("unknown overlay label: {label}"))
+    windows::overlay_init(&app, &label).ok_or_else(|| format!("未知的覆盖层标签: {label}"))
 }
 
 #[tauri::command]

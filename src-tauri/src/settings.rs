@@ -1,3 +1,5 @@
+//! 设置持久化：JSON 原子读写（tmp+改名+刷盘）、归一化校验与崩溃残留清理
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 

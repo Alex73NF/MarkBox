@@ -1,3 +1,5 @@
+//! 会话日志：GUI 子系统下 stderr 在 release 被 std 静默丢弃，错误与 panic 落盘 markbox.log
+
 use std::fmt::Display;
 use std::io::Write;
 use std::path::PathBuf;
@@ -35,8 +37,10 @@ pub(crate) fn log_error(message: &str) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let line = format!("[markbox] [{secs}] {message}");
-    eprintln!("{line}");
-    let path = LOG_FILE.lock().unwrap().clone();
+    // 不用 eprintln!：其写失败会 panic，panic hook 内递归即 abort（dev 下管道断裂 EPIPE 可达）
+    let _ = writeln!(std::io::stderr(), "{line}");
+    // 临界区只含 Option<PathBuf>::clone（不可 panic），毒化不可达；防御性容忍以免 hook 内二次 panic
+    let path = LOG_FILE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     if let Some(p) = path {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(p) {
             let _ = writeln!(f, "{line}");
