@@ -5,14 +5,10 @@ description = "MarkBox - screen region marker"
 authors = ["Alex73NF"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "markbox_lib"
+# _lib 后缀使 lib 名与 bin 名不冲突（Windows 限制，rust-lang/cargo#8519，命名本身不改）
 # 桌面端只需 rlib 供 main.rs 引用；staticlib/cdylib 是 Tauri 移动端目标才需要的
+name = "markbox_lib"
 crate-type = ["rlib"]
 
 [build-dependencies]

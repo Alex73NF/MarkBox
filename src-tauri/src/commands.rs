@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+use crate::logging;
 use crate::settings;
 use crate::windows;
 use crate::AppState;
@@ -10,10 +11,22 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MonitorRect { pub x: i32, pub y: i32, pub width: u32, pub height: u32 }
 
+impl From<&tauri::Monitor> for MonitorRect {
+    fn from(m: &tauri::Monitor) -> Self {
+        MonitorRect {
+            x: m.position().x,
+            y: m.position().y,
+            width: m.size().width,
+            height: m.size().height,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OverlayInit { pub monitor: MonitorRect }
 
+/// w/h：选区矩形字段名（对齐前端 types.ts 的 w/h vs width/height 约定，勿"统一"）
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhysRect { pub x: i32, pub y: i32, pub w: u32, pub h: u32 }
@@ -32,22 +45,28 @@ pub(crate) struct MarkState { pub has_mark: bool }
 // 圈选/确认/取消等窗口操作命令保持同步（主线程串行），窗口创建/销毁时序才确定。
 #[tauri::command(async)]
 pub(crate) fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
-    state.settings.lock().unwrap().clone()
+    lock_settings(&state).clone()
 }
 
 #[tauri::command(async)]
 pub(crate) fn save_settings(app: AppHandle, state: tauri::State<AppState>, settings: settings::Settings) -> Result<settings::Settings, String> {
     let normalized = settings::normalize(&settings);
+    // 路径求值放在锁外：其内部 expect 是设置链路唯一现实 panic 点，不能在持锁时引爆
+    let path = settings::settings_path(&app);
     // 写盘与内存提交在同一把锁内串行：并发 saveNow 交错时保证内存 == 磁盘，
     // 否则 A 写盘 → B 写盘 → B 先拿锁 → A 后拿锁会让磁盘是 B、内存是 A
-    let mut guard = state.settings.lock().unwrap();
-    settings::save_to(&settings::settings_path(&app), &normalized).map_err(|e| e.to_string())?;
+    let mut guard = lock_settings(&state);
+    settings::save_to(&path, &normalized).map_err(|e| e.to_string())?;
     *guard = normalized.clone();
     drop(guard);
-    if let Err(e) = app.emit_to("mark", "settings-updated", &normalized) {
-        eprintln!("[markbox] 发送 settings-updated 失败: {e}");
-    }
+    logging::log_err("发送 settings-updated 失败", app.emit_to("mark", "settings-updated", &normalized));
     Ok(normalized)
+}
+
+/// 取设置锁；毒化（持锁 panic 过）也取回内部数据继续服务——
+/// 设置并非锁协议参与者，毒化只说明曾有一次 panic，级联拒服比用旧值更糟
+fn lock_settings<'a>(state: &'a tauri::State<'_, AppState>) -> std::sync::MutexGuard<'a, settings::Settings> {
+    state.settings.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[tauri::command]
@@ -71,7 +90,7 @@ pub(crate) fn confirm_selection(app: AppHandle, payload: ConfirmPayload) -> Resu
             return Err(e.to_string());
         }
     } else {
-        // 圈选期间显示器被拔掉：整单取消
+        // 圈选期间显示器被拔掉：整个圈选会话取消
         windows::emit_mark_state(&app);
     }
     Ok(())
@@ -84,21 +103,16 @@ pub(crate) fn cancel_selection(app: AppHandle) {
 
 #[tauri::command]
 pub(crate) fn clear_mark(app: AppHandle) {
-    windows::destroy_mark(&app);
-    // destroy 在事件循环异步生效，事后查询会拿到过期状态，直接广播已知结果
-    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: false }) {
-        eprintln!("[markbox] 发送 mark-state 失败: {e}");
-    }
+    // destroy 在事件循环异步生效，成功后查询会拿到过期状态：按销毁请求结果广播——
+    // 失败时保守置 true，按钮保持可用（托盘清除是重试通道）
+    let has_mark = windows::destroy_mark(&app).is_err();
+    logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark }));
 }
 
 /// 托盘菜单事件分发用
 pub(crate) fn handle_tray(app: &AppHandle, id: &str) {
     match id {
-        "select" => {
-            if let Err(e) = windows::begin_selection(app) {
-                eprintln!("[markbox] 发起圈选失败: {e}");
-            }
-        }
+        "select" => logging::log_err("发起圈选失败", windows::begin_selection(app)),
         "clear" => clear_mark(app.clone()),
         "show" => windows::show_main(app),
         "quit" => app.exit(0),

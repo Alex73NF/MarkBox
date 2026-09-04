@@ -1,0 +1,12 @@
+# 日常门禁：push/PR 即跑全部测试，回归即时暴露，而不是攒到打 tag 才发现
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gates:
+    uses: ./.github/workflows/gates.yml

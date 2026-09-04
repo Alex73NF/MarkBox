@@ -1,0 +1,28 @@
+# 共享门禁：被 ci.yml（日常 push/PR）与 release.yml（发版）复用
+name: gates
+on:
+  workflow_call:
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm 版本取自 package.json 的 packageManager 字段
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      # vitest 不做类型检查：tsc 错误必须尽早暴露。此处 tsc 与 tauri build 的
+      # beforeBuildCommand（tsc && vite build）各跑一次 tsc，属有意的 fail-fast 重复
+      - run: pnpm exec tsc --noEmit
+      - name: Rust 测试
+        working-directory: src-tauri
+        run: cargo test --locked
+      - name: Rust lint
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings

@@ -7,7 +7,10 @@ permissions:
 concurrency:
   group: release-${{ github.ref_name }}
 jobs:
+  gates:
+    uses: ./.github/workflows/gates.yml
   build-windows:
+    needs: gates
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -29,15 +32,6 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      # vitest 不做类型检查：tsc 错误必须在产出发布物之前暴露（vite 构建由下方 tauri build 的 beforeBuildCommand 执行一次，不重复）
-      - run: pnpm exec tsc --noEmit
-      - name: Rust 测试
-        working-directory: src-tauri
-        run: cargo test --locked
-      - name: Rust lint
-        working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
       - run: pnpm tauri build
       - name: 打包免安装版
         shell: pwsh

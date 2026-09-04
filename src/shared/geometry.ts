@@ -1,5 +1,12 @@
+import type { MonitorRect, PhysRect } from './types';
+
 export interface Rect { x: number; y: number; w: number; h: number }
 export type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+const GAP = 8;            // 确认按钮与选区的间距
+const SIZE_FLIP_Y = 30;   // 尺寸标签贴顶翻转阈值
+const SIZE_FLIP_TOP = 4;  // 贴顶时标签距选区顶缘的偏移
+const LABEL_H = 26;       // 尺寸标签高度
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
@@ -36,4 +43,40 @@ export function clampRect(r: Rect, max: Rect): Rect {
   const x1 = Math.max(r.x, max.x), y1 = Math.max(r.y, max.y);
   const x2 = Math.min(r.x + r.w, max.x + max.w), y2 = Math.min(r.y + r.h, max.y + max.h);
   return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+}
+
+/** CSS 像素选区 → 全局物理像素矩形（确认链路）：原点平移 + 各分量独立取整，
+ *  单次换算、偏差 ≤1 物理px 无累积 */
+export function toPhys(r: Rect, monitor: MonitorRect, dpr: number): PhysRect {
+  return {
+    x: monitor.x + Math.round(r.x * dpr),
+    y: monitor.y + Math.round(r.y * dpr),
+    w: Math.round(r.w * dpr),
+    h: Math.round(r.h * dpr),
+  };
+}
+
+/** 物理像素显示器 → 本屏 CSS 像素边界（overlay 自身的坐标系） */
+export function cssBounds(monitor: MonitorRect, dpr: number): Rect {
+  return { x: 0, y: 0, w: monitor.width / dpr, h: monitor.height / dpr };
+}
+
+/** 尺寸标签相对选区的偏移：默认上缘外侧，贴顶翻进框内；
+ *  贴右时右缘对齐屏幕右缘（负值=左移进屏内） */
+export function sizeLabelOffset(rect: Rect, bounds: Rect, labelW: number): { top: number; left: number } {
+  return {
+    top: rect.y < SIZE_FLIP_Y ? SIZE_FLIP_TOP : -LABEL_H,
+    left: Math.min(0, bounds.w - rect.x - labelW),
+  };
+}
+
+/** 确认按钮相对选区的偏移：框右下角外侧；贴底翻到框上方（贴顶翻不动时收进框内）；
+ *  贴右收进框内右下，窄于按钮时右缘对齐屏幕右缘（负值=移到框左外侧），保证按钮完整可见 */
+export function confirmButtonOffset(rect: Rect, bounds: Rect, btnW: number, btnH: number): { x: number; y: number } {
+  let x = rect.w + GAP;
+  if (rect.x + rect.w + btnW > bounds.w) x = Math.min(rect.w, bounds.w - rect.x) - btnW;
+  let y = rect.h + GAP;
+  if (rect.y + rect.h + btnH > bounds.h) y = -btnH - GAP;
+  if (rect.y + y < 0) y = GAP;
+  return { x, y };
 }

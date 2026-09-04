@@ -1,4 +1,5 @@
 mod commands;
+mod logging;
 mod settings;
 mod windows;
 
@@ -16,7 +17,7 @@ pub(crate) struct AppState {
     pub(crate) monitors: Mutex<Vec<(String, MonitorRect)>>,
     pub(crate) selecting: Mutex<bool>,
     // 圈选创建代次：end_selection（取消/确认/兜底销毁）递增，创建循环据此发现会话已被取消并静默中止。
-    // 当前所有命令与 Destroyed 事件都在主线程串行执行，代次读写实际单线程，Relaxed 即正确；
+    // 当前圈选命令与 Destroyed 事件都在主线程串行执行，代次读写实际单线程，Relaxed 即正确；
     // 若未来把圈选命令 async 化，需改用 Acquire/Release 建立跨线程可见性
     pub(crate) selection_gen: AtomicU64,
 }
@@ -27,15 +28,15 @@ pub fn run() {
             windows::show_main(app);
         }))
         .setup(|app| {
+            logging::init(app.handle());
             let path = settings::settings_path(app.handle());
             // save_to 崩在写盘与改名之间会留下唯一名 tmp，启动时先清掉再加载
             settings::cleanup_tmp_leftovers(&path);
             // 文件缺失/损坏时回退默认并重建；正常路径不多写一次磁盘
             let (loaded, needs_repair) = settings::load_or_repair(&path);
             if needs_repair {
-                if let Err(e) = settings::save_to(&path, &loaded) {
-                    eprintln!("[markbox] 重建设置文件失败: {e}");
-                }
+                logging::log_error("设置文件缺失或损坏，已回退默认值并在下次保存时重建");
+                logging::log_err("重建设置文件失败", settings::save_to(&path, &loaded));
             }
             app.manage(AppState {
                 settings: Mutex::new(loaded),
@@ -68,9 +69,7 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } if window.label() == "main" => {
                 api.prevent_close();
-                if let Err(e) = window.hide() {
-                    eprintln!("[markbox] 隐藏主窗口失败: {e}");
-                }
+                windows::hide_main(window.app_handle());
             }
             WindowEvent::Destroyed if window.label().starts_with("overlay-") => {
                 // 任一 overlay 被销毁（崩溃/拔屏）→ 兜底清掉全部圈选层

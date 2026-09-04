@@ -27,34 +27,37 @@ function syncOutputs() {
 
 report('get_settings', invoke<Settings>('get_settings').then(fillForm));
 
-/** 颜色选择等低频改动：立即保存；失败时以持久化真值回滚表单 */
-async function saveNow() {
-  const mine = ++saveSeq; // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
+let saveTimer: number | undefined;
+let saveSeq = 0;
+
+/** 保存当前表单并回填归一化结果；序号失配（已有更新的保存落定）时不回填；
+ *  失败以持久化真值回滚。立即保存与防抖保存共用同一出口，失败语义一致。
+ *  序号/防抖时序属手动验证项（模块含 DOM，vitest 不加载），修改时逐案核对 */
+async function persist(mine: number) {
   try {
-    fillForm(await invoke<Settings>('save_settings', { settings: readForm() }));
+    const saved = await invoke<Settings>('save_settings', { settings: readForm() });
+    if (mine === saveSeq) fillForm(saved);
   } catch (err) {
     console.error('[markbox:save_settings]', err);
     try {
       const truth = await invoke<Settings>('get_settings');
-      // 已有更新的保存落定：磁盘真值可能就是用户后续输入，别踩掉表单
-      if (mine === saveSeq) fillForm(truth);
+      if (mine === saveSeq) fillForm(truth); // 已有更新的保存落定：磁盘真值可能就是用户后续输入，别踩掉表单
     } catch (revertErr) {
       console.error('[markbox:get_settings]', revertErr);
     }
   }
 }
 
-/** 滑块拖动的高频 input：尾部防抖 + 序号守卫，避免每 tick 写盘和乱序回填旧值 */
-let saveTimer: number | undefined;
-let saveSeq = 0;
+/** 颜色选择等低频改动：立即保存 */
+function saveNow() {
+  void persist(++saveSeq); // 递增序号使在途的防抖回填失效，防止其晚到把旧快照回填进表单
+}
+
+/** 滑块拖动的高频 input：尾部防抖，避免每 tick 写盘和乱序回填旧值 */
 function saveDebounced() {
   syncOutputs();
   window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    const mine = ++saveSeq;
-    report('save_settings', invoke<Settings>('save_settings', { settings: readForm() })
-      .then((saved) => { if (mine === saveSeq) fillForm(saved); }));
-  }, 150);
+  saveTimer = window.setTimeout(() => { void persist(++saveSeq); }, 150);
 }
 
 $<HTMLInputElement>('color').addEventListener('input', () => { void saveNow(); });

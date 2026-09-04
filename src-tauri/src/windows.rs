@@ -6,6 +6,7 @@ use tauri::{
 };
 
 use crate::commands::{MarkState, MonitorRect, OverlayInit};
+use crate::logging;
 
 /// 圈选互斥标记的 RAII 复位：无论正常返回还是 panic 展开都恢复 false，防止标记滞留后圈选永久静默失效
 struct SelectingGuard<'a>(&'a Mutex<bool>);
@@ -34,24 +35,13 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             .available_monitors()?
             .iter()
             .enumerate()
-            .map(|(i, m)| {
-                (format!("overlay-{i}"), MonitorRect {
-                    x: m.position().x,
-                    y: m.position().y,
-                    width: m.size().width,
-                    height: m.size().height,
-                })
-            })
+            .map(|(i, m)| (format!("overlay-{i}"), MonitorRect::from(m)))
             .collect();
         if infos.is_empty() {
             // 一台显示器都没有：保留主窗口并报错，别把用户丢进只剩托盘的黑屏
             return Err(tauri::Error::Io(std::io::Error::other("no available monitors")));
         }
-        if let Some(main) = app.get_webview_window("main") {
-            if let Err(e) = main.hide() {
-                eprintln!("[markbox] 隐藏主窗口失败: {e}");
-            }
-        }
+        hide_main(app);
         // 先存后建：overlay 窗口一创建就可能回调 overlay_ready，必须保证 monitors 已就绪
         *state.monitors.lock().unwrap() = infos.clone();
         // 创建代次快照：此后 end_selection 一旦递增即说明本会话已被取消/确认，循环要静默收场
@@ -72,9 +62,7 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             // 多屏逐个 build 期间用户已在先建的屏上取消/确认（spec：任何阶段取消都不留框）：
             // 销毁刚建出的窗口并中止，不再把后续屏幕的覆盖层弹给已取消的用户
             if state.selection_gen.load(Ordering::Relaxed) != gen {
-                if let Err(e) = win.destroy() {
-                    eprintln!("[markbox] 销毁 {label} 失败: {e}");
-                }
+                logging::log_err(&format!("销毁 {label} 失败"), win.destroy());
                 return Ok(());
             }
             win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
@@ -90,9 +78,7 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
             last = Some(win);
         }
         if let Some(win) = focus_target.or(last) {
-            if let Err(e) = win.set_focus() {
-                eprintln!("[markbox] overlay 设置键盘焦点失败: {e}");
-            }
+            logging::log_err("overlay 设置键盘焦点失败", win.set_focus());
         }
         Ok(())
     })();
@@ -104,15 +90,18 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
     result
 }
 
+/// 隐藏主窗口（圈选启动/关闭到托盘共用）
+pub(crate) fn hide_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        logging::log_err("隐藏主窗口失败", w.hide());
+    }
+}
+
 /// 显示并聚焦主窗口（单实例二次唤起 / 托盘 / 圈选失败恢复共用）
 pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        if let Err(e) = w.show() {
-            eprintln!("[markbox] 显示主窗口失败: {e}");
-        }
-        if let Err(e) = w.set_focus() {
-            eprintln!("[markbox] 聚焦主窗口失败: {e}");
-        }
+        logging::log_err("显示主窗口失败", w.show());
+        logging::log_err("聚焦主窗口失败", w.set_focus());
     }
 }
 
@@ -122,15 +111,13 @@ pub(crate) fn end_selection(app: &AppHandle) {
     state.selection_gen.fetch_add(1, Ordering::Relaxed);
     for (label, win) in app.webview_windows() {
         if label.starts_with("overlay-") {
-            if let Err(e) = win.destroy() {
-                eprintln!("[markbox] 销毁 {label} 失败: {e}");
-            }
+            logging::log_err(&format!("销毁 {label} 失败"), win.destroy());
         }
     }
 }
 
 pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
-    destroy_mark(app);
+    logging::log_err("销毁旧标记窗失败", destroy_mark(app));
     let build = || {
         WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
             .title("markbox-mark")
@@ -151,7 +138,7 @@ pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tau
             if app.get_webview_window("mark").is_none() {
                 return Err(build_err);
             }
-            destroy_mark(app);
+            logging::log_err("销毁旧标记窗失败", destroy_mark(app));
             build()?
         }
     };
@@ -159,17 +146,14 @@ pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tau
     win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
     win.set_ignore_cursor_events(true)?;
     win.show()?;
-    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: true }) {
-        eprintln!("[markbox] 发送 mark-state 失败: {e}");
-    }
+    logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
     Ok(())
 }
 
-pub(crate) fn destroy_mark(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("mark") {
-        if let Err(e) = win.destroy() {
-            eprintln!("[markbox] 销毁标记窗失败: {e}");
-        }
+pub(crate) fn destroy_mark(app: &AppHandle) -> tauri::Result<()> {
+    match app.get_webview_window("mark") {
+        Some(win) => win.destroy(),
+        None => Ok(()),
     }
 }
 
@@ -178,23 +162,13 @@ pub(crate) fn mark_exists(app: &AppHandle) -> bool {
 }
 
 pub(crate) fn emit_mark_state(app: &AppHandle) {
-    if let Err(e) = app.emit_to("main", "mark-state", &MarkState { has_mark: mark_exists(app) }) {
-        eprintln!("[markbox] 发送 mark-state 失败: {e}");
-    }
+    logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: mark_exists(app) }));
 }
 
 /// 显示器热插拔保护：确认时 rect 必须仍落在某个现存显示器上
 pub(crate) fn rect_on_existing_monitor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> bool {
     let Ok(monitors) = app.available_monitors() else { return false };
-    let rects: Vec<MonitorRect> = monitors
-        .iter()
-        .map(|m| MonitorRect {
-            x: m.position().x,
-            y: m.position().y,
-            width: m.size().width,
-            height: m.size().height,
-        })
-        .collect();
+    let rects: Vec<MonitorRect> = monitors.iter().map(MonitorRect::from).collect();
     rect_intersects_any_monitor(x, y, w, h, &rects)
 }
 
@@ -239,9 +213,12 @@ mod tests {
 
     #[test]
     fn adjacent_edge_is_not_intersection() {
-        // 恰好贴在显示器右缘外侧：x == mx + mw，左开区间判定为不相交
+        // 显示器区间左闭右开 [mx, mx+mw)：恰贴边缘（相等）不算相交
         let ms = [monitor(0, 0, 1920, 1080)];
-        assert!(!rect_intersects_any_monitor(1920, 100, 50, 50, &ms));
+        assert!(!rect_intersects_any_monitor(1920, 100, 50, 50, &ms)); // 右缘外贴：x == mx+mw
+        assert!(!rect_intersects_any_monitor(-50, 100, 50, 50, &ms)); // 左缘外贴：x+w == mx
+        assert!(!rect_intersects_any_monitor(100, -50, 50, 50, &ms)); // 顶缘外贴：y+h == my
+        assert!(!rect_intersects_any_monitor(100, 1080, 50, 50, &ms)); // 底缘外贴：y == my+mh
     }
 
     #[test]

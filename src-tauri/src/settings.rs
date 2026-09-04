@@ -1,6 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 /// 并发 save_to 的临时文件序号：固定 tmp 名会让两个并发写互相踩踏
@@ -22,7 +23,7 @@ impl Default for Settings {
     }
 }
 
-/// 非法值回退默认（颜色格式、粗细 1-10、圆角 0-16）
+/// 颜色格式非法回退默认；粗细钳 1-10、圆角钳 0-16
 pub(crate) fn normalize(s: &Settings) -> Settings {
     let color_ok = s.border_color.len() == 7
         && s.border_color.starts_with('#')
@@ -35,7 +36,7 @@ pub(crate) fn normalize(s: &Settings) -> Settings {
 }
 
 /// 配置文件路径（app_config_dir 由固定 identifier 派生，实际不会为 None）
-pub(crate) fn settings_path(app: &AppHandle) -> std::path::PathBuf {
+pub(crate) fn settings_path(app: &AppHandle) -> PathBuf {
     app.path().app_config_dir().expect("app_config_dir must be valid").join("settings.json")
 }
 
@@ -60,23 +61,39 @@ pub(crate) fn save_to(path: &Path, s: &Settings) -> std::io::Result<()> {
         std::process::id(),
         TMP_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(serde_json::to_string_pretty(s).expect("settings serialize").as_bytes())?;
-    // 改名前先刷盘：rename 只保证进程崩溃安全，断电/系统崩溃时改名元数据可能先于数据块落盘
-    f.sync_all()?;
-    std::fs::rename(&tmp, path)
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(serde_json::to_string_pretty(s).expect("settings serialize").as_bytes())?;
+        // 改名前先刷盘：rename 只保证进程崩溃安全，断电/系统崩溃时改名元数据可能先于数据块落盘
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    };
+    let result = write();
+    if result.is_err() {
+        // 失败路径清掉 tmp，不给"启动清理崩溃残留"多留一类来源（磁盘满时更不该累积）
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// 清理崩溃残留的临时文件：save_to 崩在写盘与改名之间会留下 settings.json.tmp-*（唯一名不再自覆盖），
 /// 启动时 best-effort 清掉；此时没有任何在途保存，也不会误删
 pub(crate) fn cleanup_tmp_leftovers(settings_path: &Path) {
     let Some(dir) = settings_path.parent() else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    if !dir.is_dir() {
+        return; // 全新安装：配置目录尚不存在，无残留可清
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        crate::logging::log_error("读取配置目录失败，跳过残留临时文件清理");
+        return;
+    };
     for entry in entries.flatten() {
         if entry.file_name().to_string_lossy().starts_with("settings.json.tmp-") {
-            if let Err(e) = std::fs::remove_file(entry.path()) {
-                eprintln!("[markbox] 清理残留临时文件 {} 失败: {e}", entry.path().display());
-            }
+            crate::logging::log_err(
+                &format!("清理残留临时文件 {} 失败", entry.path().display()),
+                std::fs::remove_file(entry.path()),
+            );
         }
     }
 }
@@ -85,7 +102,7 @@ pub(crate) fn cleanup_tmp_leftovers(settings_path: &Path) {
 mod tests {
     use super::*;
 
-    fn tmp_path(name: &str) -> std::path::PathBuf {
+    fn tmp_path(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("markbox-test-{}-{}.json", name, std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -127,7 +144,9 @@ mod tests {
         // 小写 6 位十六进制合法
         let lower = normalize(&Settings { border_color: "#ff4d4f".into(), border_width: 3, border_radius: 0 });
         assert_eq!(lower.border_color, "#ff4d4f");
-        for bad in ["#FFF", "#GGGGGG"] {
+        // "#aaaaé"：é 占 2 字节，总长恰 7；非十六进制 → 回退默认。同时钉住 && 求值顺序——
+        // 若把 starts_with('#') 挪到 [1..] 切片之后，此例会 panic 而非回退
+        for bad in ["#FFF", "#GGGGGG", "#aaaaé"] {
             let s = normalize(&Settings { border_color: bad.into(), border_width: 3, border_radius: 0 });
             assert_eq!(s.border_color, "#FF4D4F");
         }
@@ -138,7 +157,17 @@ mod tests {
         let p = tmp_path("roundtrip");
         let s = Settings { border_color: "#00C2FF".into(), border_width: 5, border_radius: 8 };
         save_to(&p, &s).unwrap();
-        assert_eq!(load_or_repair(&p), (s, false));
+        assert_eq!(load_or_repair(&p), (s.clone(), false));
+        // 序列化方向必须是 camelCase（前端 types.ts 契约）：roundtrip 对改名不敏感，单靠它钉不住
+        assert!(serde_json::to_string(&s).unwrap().contains(r#""borderColor""#));
+        // 成功路径不残留 tmp（rename 已消费）；并行测试各用各的文件名前缀，互不干扰
+        let prefix = format!("{}.tmp-", p.file_name().unwrap().to_string_lossy());
+        let leftovers = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+            .count();
+        assert_eq!(leftovers, 0);
         let _ = std::fs::remove_file(&p);
     }
 

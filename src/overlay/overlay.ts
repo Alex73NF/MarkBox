@@ -1,14 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import type { ConfirmPayload, OverlayInit, PhysRect } from '../shared/types';
-import { applyMove, applyResize, clampRect, normalizeDrag, type Handle, type Rect } from '../shared/geometry';
+import type { ConfirmPayload, OverlayInit } from '../shared/types';
+import {
+  applyMove, applyResize, clampRect, confirmButtonOffset, cssBounds, normalizeDrag,
+  sizeLabelOffset, toPhys, type Handle, type Rect,
+} from '../shared/geometry';
 import { report } from '../shared/report';
 
 const MIN_DRAG = 5;                                   // 松手时小于此值视为误触
 const MIN_SIZE = { w: 10, h: 10 };                    // 手柄调整的最小尺寸
-const GAP = 8;                                        // 确认按钮与选区的间距
-const SIZE_FLIP_Y = 30;                               // 尺寸标签贴顶翻转阈值
-const LABEL_H = 26;                                   // 尺寸标签高度
 const CONFIRM_BTN_FALLBACK = { w: 84, h: 30 };        // 按钮进入调整态前的估算值（进入后以实测为准）
 const label = getCurrentWebviewWindow().label;
 
@@ -21,29 +21,39 @@ let active: { kind: 'move'; base: Rect } | { kind: 'resize'; handle: Handle; bas
 let btnW = CONFIRM_BTN_FALLBACK.w;
 let btnH = CONFIRM_BTN_FALLBACK.h;
 
+function cancel() {
+  if (phase === 'closing') return; // 确认/取消已触发、窗口收尾进行中，忽略重复 Esc/右键
+  // 与 confirm 对称进入 closing：destroy 是异步窗口期，期间屏蔽 Enter/✓，
+  // 防同帧 Esc+Enter 连按在取消后仍确认出框。
+  // closing 是一次性锁存：两条命令的业务失败面都伴随覆盖层销毁，仅剩 IPC 整体故障会让窗口滞留，
+  // 届时应用本身已在退出边缘
+  phase = 'closing';
+  report('cancel_selection', invoke('cancel_selection'));
+}
+
+function confirm() {
+  if (phase !== 'adjust') return; // 防回车连发/按钮双击重复确认
+  phase = 'closing';
+  report('confirm_selection', invoke('confirm_selection', {
+    payload: { rect: toPhys(rect, init.monitor, window.devicePixelRatio) } satisfies ConfirmPayload,
+  }));
+}
+
+// 先注册两条不依赖 DOM 元素与初始化结果的退出通道：即使下方元素查找或 overlay_ready 失败，
+// Esc/右键也能取消（cancel_selection 在 Rust 侧销毁全部覆盖层）
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') cancel();
+  if (e.key === 'Enter' && phase === 'adjust') confirm();
+});
+
+window.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  cancel();
+});
+
 const sel = document.getElementById('sel')!;
 const size = document.getElementById('size')!;
 const confirmBtn = document.getElementById('confirm')!;
-
-const cancel = () => {
-  if (phase === 'closing') return; // 确认/取消已触发、teardown 进行中，忽略重复 Esc/右键
-  // 与 confirm 对称进入 closing：destroy 是异步窗口期，期间屏蔽 Enter/✓，
-  // 防同帧 Esc+Enter 连按在取消后仍确认出框
-  phase = 'closing';
-  report('cancel_selection', invoke('cancel_selection'));
-};
-const confirm = () => {
-  if (phase !== 'adjust') return; // 防回车连发/按钮双击重复确认
-  phase = 'closing';
-  const dpr = window.devicePixelRatio;
-  const phys: PhysRect = {
-    x: init.monitor.x + Math.round(rect.x * dpr),
-    y: init.monitor.y + Math.round(rect.y * dpr),
-    w: Math.round(rect.w * dpr),
-    h: Math.round(rect.h * dpr),
-  };
-  report('confirm_selection', invoke('confirm_selection', { payload: { rect: phys } satisfies ConfirmPayload }));
-};
 
 function render() {
   sel.style.left = `${rect.x}px`;
@@ -53,18 +63,12 @@ function render() {
   const dpr = window.devicePixelRatio;
   size.style.display = rect.w === 0 || rect.h === 0 ? 'none' : ''; // 0×0（尚未拖出）不显示尺寸标签
   size.textContent = `${Math.round(rect.w * dpr)} × ${Math.round(rect.h * dpr)}`;
-  size.style.top = rect.y < SIZE_FLIP_Y ? '4px' : `-${LABEL_H}px`;
-  // 贴右时标签右缘对齐屏幕右缘（负值=向左移进屏内），常规情况 left 归 0
-  size.style.left = `${Math.min(0, bounds.w - rect.x - size.offsetWidth)}px`;
-  // 确认按钮：框右下角外侧，贴底翻到框上方（贴顶翻不动时收进框内），贴右收进框内右下；
-  // 贴右且窄于按钮时右缘对齐屏幕右缘（bx 可为负=移到框左外侧），保证按钮完整可见
-  let bx = rect.w + GAP;
-  if (rect.x + rect.w + btnW > bounds.w) bx = Math.min(rect.w, bounds.w - rect.x) - btnW;
-  let by = rect.h + GAP;
-  if (rect.y + rect.h + btnH > bounds.h) by = -btnH - GAP;
-  if (rect.y + by < 0) by = GAP; // 贴顶翻转也会越出窗口时收进框内
-  confirmBtn.style.left = `${bx}px`;
-  confirmBtn.style.top = `${by}px`;
+  const labelPos = sizeLabelOffset(rect, bounds, size.offsetWidth);
+  size.style.top = `${labelPos.top}px`;
+  size.style.left = `${labelPos.left}px`;
+  const btnPos = confirmButtonOffset(rect, bounds, btnW, btnH);
+  confirmBtn.style.left = `${btnPos.x}px`;
+  confirmBtn.style.top = `${btnPos.y}px`;
 }
 
 function enterAdjust() {
@@ -84,7 +88,6 @@ window.addEventListener('pointerdown', (e) => {
   // 会顶替 active，行为有界。鼠标单指针为主用场景，不为触屏引入额外状态机。
   const target = e.target as HTMLElement;
   if (phase === 'idle' || phase === 'draft') {
-    // draft 中再次按下视为重新起拖（指针事件万一丢失时的自恢复出口）
     phase = 'draft';
     dragStart = { x: e.clientX, y: e.clientY };
     rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
@@ -141,22 +144,18 @@ window.addEventListener('pointercancel', (e) => {
   if (phase === 'draft') cancel();
 });
 
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') cancel();
-  if (e.key === 'Enter' && phase === 'adjust') confirm();
-});
-
-window.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  cancel();
-});
-
 confirmBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
 confirmBtn.addEventListener('click', confirm);
 
-report('overlay_ready', invoke<OverlayInit>('overlay_ready', { label }).then((payload) => {
-  init = payload;
-  const dpr = window.devicePixelRatio;
-  bounds = { x: 0, y: 0, w: init.monitor.width / dpr, h: init.monitor.height / dpr };
-  render();
-}));
+invoke<OverlayInit>('overlay_ready', { label })
+  .then((payload) => {
+    init = payload;
+    bounds = cssBounds(init.monitor, window.devicePixelRatio);
+    render();
+  })
+  .catch((err) => {
+    console.error('[markbox:overlay_ready]', err);
+    // 拿不到本屏几何即不可用：自愈式整单取消（否则只剩一块吞点击的全屏暗层）；
+    // 若 IPC 整体故障连取消也发不出，Esc/右键通道随应用退出而终
+    report('cancel_selection', invoke('cancel_selection'));
+  });
