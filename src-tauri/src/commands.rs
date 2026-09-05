@@ -98,11 +98,19 @@ pub(crate) fn confirm_selection(app: AppHandle, payload: ConfirmPayload) -> Resu
     windows::end_selection(&app);
     if ok {
         if let Err(e) = windows::spawn_mark(&app, r.x, r.y, r.w, r.h) {
+            // 失败必留痕（markbox.log）： rect 一并记录，便于远程定位是几何问题还是窗口问题
+            logging::log_error(&format!("创建标记窗失败 rect=({},{},{},{}): {e}", r.x, r.y, r.w, r.h));
             windows::show_main(&app); // 标记窗建失败也要把主窗口还给用户，别丢在黑屏里
             return Err(e.to_string());
         }
     } else {
-        // 圈选期间显示器被拔掉：整个圈选会话取消
+        // 圈选期间显示器被拔掉：整个圈选会话取消。同样把主窗还回去，
+        // 否则覆盖层已销毁、标记未建、主窗仍隐藏，用户面对的是"全没了"的无窗状态
+        logging::log_error(&format!(
+            "确认的选区不在任何现存显示器上，圈选已取消 rect=({},{},{},{})",
+            r.x, r.y, r.w, r.h
+        ));
+        windows::show_main(&app);
         windows::emit_mark_state(&app);
     }
     Ok(())

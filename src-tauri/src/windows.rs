@@ -151,31 +151,33 @@ pub(crate) fn end_selection(app: &AppHandle) {
 }
 
 pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
-    logging::log_err("销毁旧标记窗失败", destroy_mark(app));
-    let build = || {
-        WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
-            .title("markbox-mark")
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focusable(false)
-            .resizable(false)
-            .visible(false)
-            .build()
-    };
-    // 防回车重复确认的并发残余：build 失败且 "mark" 仍存在（上一次异步 destroy 未完成）
-    // → 再销毁一次并重试一次，仍失败才向上抛错
-    let win = match build() {
-        Ok(win) => win,
-        Err(build_err) => {
-            if app.get_webview_window("mark").is_none() {
-                return Err(build_err);
-            }
-            logging::log_err("销毁旧标记窗失败", destroy_mark(app));
-            build()?
+    // 已有标记窗优先复用（改位置/尺寸即可，mark.html 的 #box 是 inset:0 相对布局，内容自适应）：
+    // destroy 是投递给事件循环的异步消息，label 要等 Destroyed 事件处理完才从窗口表移除；
+    // 在同一线程里 destroy→build 中间事件循环一次都没跑，build 必撞 WindowLabelAlreadyExists
+    // （重试同样来不及），结果就是旧框被拆、新框建不出。复用从根上消除该竞态，还免去 webview 重载。
+    if let Some(win) = app.get_webview_window("mark") {
+        let moved = win
+            .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+            .and_then(|_| win.set_size(Size::Physical(PhysicalSize::new(w, h))));
+        if moved.is_ok() {
+            win.show()?;
+            logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
+            return Ok(());
         }
-    };
+        // 极小窗口：复用中途窗口刚被销毁（清除标记后瞬间确认），落回新建；若 label 仍在
+        // 销毁流程中导致 build 失败，错误上抛由调用方记录并还回主窗口
+        logging::log_err("复用旧标记窗失败，改为重建", moved);
+    }
+    let win = WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
+        .title("markbox-mark")
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focusable(false)
+        .resizable(false)
+        .visible(false)
+        .build()?;
     win.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
     win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
     win.set_ignore_cursor_events(true)?;
