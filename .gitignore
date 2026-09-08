@@ -25,3 +25,4 @@ dist-ssr
 
 # AI 审查过程产物
 .superpowers/
+docs/superpowers/
