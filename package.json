@@ -1,7 +1,7 @@
 {
   "name": "markbox",
   "private": true,
-  "packageManager": "pnpm@11.21.0",
+  "packageManager": "pnpm@12.3.4",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
