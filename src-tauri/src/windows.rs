@@ -187,8 +187,9 @@ fn rect_scale_factor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> f64 {
 }
 
 pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
+    let scale = rect_scale_factor(app, x, y, w, h);
     // 缩放与窗口状态无关、只取决于矩形落位，两条路径共用一次求值
-    let (gx, gy, gw, gh) = mark_window_geometry(x, y, w, h, rect_scale_factor(app, x, y, w, h));
+    let (gx, gy, gw, gh) = mark_window_geometry(x, y, w, h, scale);
     // 已有标记窗优先复用（改位置/尺寸即可，mark.html 的 #box 按 inset 内缩，内容自适应）：
     // destroy 是投递给事件循环的异步消息，label 要等 Destroyed 事件处理完才从窗口表移除；
     // 在同一线程里 destroy→build 中间事件循环一次都没跑，build 必撞 WindowLabelAlreadyExists
@@ -210,6 +211,9 @@ pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tau
         .title("markbox-mark")
         .decorations(false)
         .transparent(true)
+        // macOS 系统窗影按内容 alpha 轮廓计算：会沿发光外沿画一圈暗晕、并渗进透明中心
+        // （框内外各一条灰线的根因，纯灰背板像素剖面实测），标记窗必须关掉
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .focusable(false)
