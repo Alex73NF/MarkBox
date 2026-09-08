@@ -1,0 +1,46 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    MarkBox 应用图标源文件（1024×1024）
+    元素均取自产品真实 UI：
+    - 紫墨色底  = overlay 全屏压暗色 rgba(31,22,58) 的不透明化
+    - 发光圆角框 = mark.html 标记框（默认色 #FF4FA3，内外双侧发光）
+    - 白点粉圈手柄 = overlay 拖拽手柄（白心粉圈 + 墨色硬偏移阴影）
+    重新生成全套尺寸：
+      1. pnpm tauri icon src-tauri/icons/icon.svg   （会用母版重写所有 png/icns/ico）
+      2. 用 icon-small.svg 渲染 16/24/32 PNG，与 icon.svg 渲染的 48/64/128/256
+         一起重打包 icon.ico（16px 下母版光晕糊成一团，小尺寸必须用简化变体）
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#271D4A"/>
+      <stop offset="1" stop-color="#170F31"/>
+    </linearGradient>
+    <filter id="halo" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="42"/>
+    </filter>
+    <filter id="sheen" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="13"/>
+    </filter>
+  </defs>
+
+  <!-- 压暗的屏幕 -->
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+
+  <!-- 外侧光晕 -->
+  <rect x="172" y="300" width="680" height="392" rx="112" fill="none"
+        stroke="#FF4FA3" stroke-width="104" filter="url(#halo)" opacity="0.55"/>
+
+  <!-- 标记框本体 -->
+  <rect x="172" y="300" width="680" height="392" rx="112" fill="none"
+        stroke="#FF4FA3" stroke-width="88"/>
+
+  <!-- 内侧亮光 -->
+  <rect x="172" y="300" width="680" height="392" rx="112" fill="none"
+        stroke="#FFB1D6" stroke-width="30" filter="url(#sheen)" opacity="0.9"/>
+
+  <!-- 对角手柄（nw / se）：白心粉圈 + 墨色硬偏移阴影 -->
+  <circle cx="184" cy="313" r="46" fill="#120B26" opacity="0.5"/>
+  <circle cx="864" cy="705" r="46" fill="#120B26" opacity="0.5"/>
+  <circle cx="172" cy="300" r="46" fill="#FFFFFF" stroke="#FF4FA3" stroke-width="16"/>
+  <circle cx="852" cy="692" r="46" fill="#FFFFFF" stroke="#FF4FA3" stroke-width="16"/>
+</svg>
