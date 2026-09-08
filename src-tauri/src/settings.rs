@@ -21,7 +21,7 @@ pub(crate) struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { border_color: "#FF4D4F".into(), border_width: 3, border_radius: 0 }
+        Self { border_color: "#FF4FA3".into(), border_width: 3, border_radius: 10 }
     }
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn normalize(s: &Settings) -> Settings {
         && s.border_color.starts_with('#')
         && s.border_color[1..].chars().all(|c| c.is_ascii_hexdigit());
     Settings {
-        border_color: if color_ok { s.border_color.clone() } else { "#FF4D4F".into() },
+        border_color: if color_ok { s.border_color.clone() } else { "#FF4FA3".into() },
         border_width: s.border_width.clamp(1, 10),
         border_radius: s.border_radius.clamp(0, 16),
     }
@@ -114,15 +114,15 @@ mod tests {
     #[test]
     fn default_values() {
         let s = Settings::default();
-        assert_eq!(s.border_color, "#FF4D4F");
+        assert_eq!(s.border_color, "#FF4FA3");
         assert_eq!(s.border_width, 3);
-        assert_eq!(s.border_radius, 0);
+        assert_eq!(s.border_radius, 10);
     }
 
     #[test]
     fn normalize_fixes_invalid() {
         let s = normalize(&Settings { border_color: "red".into(), border_width: 99, border_radius: 99 });
-        assert_eq!(s.border_color, "#FF4D4F");
+        assert_eq!(s.border_color, "#FF4FA3");
         assert_eq!(s.border_width, 10);
         assert_eq!(s.border_radius, 16);
     }
@@ -150,7 +150,7 @@ mod tests {
         // 若把 starts_with('#') 挪到 [1..] 切片之后，此例会 panic 而非回退
         for bad in ["#FFF", "#GGGGGG", "#aaaaé"] {
             let s = normalize(&Settings { border_color: bad.into(), border_width: 3, border_radius: 0 });
-            assert_eq!(s.border_color, "#FF4D4F");
+            assert_eq!(s.border_color, "#FF4FA3");
         }
     }
 

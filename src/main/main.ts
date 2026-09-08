@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { MarkState, Settings } from '../shared/types';
+import { glowShadow } from '../shared/glow';
 import { report } from '../shared/report';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -10,6 +11,7 @@ function fillForm(s: Settings) {
   $<HTMLInputElement>('width').value = String(s.borderWidth);
   $<HTMLInputElement>('radius').value = String(s.borderRadius);
   syncOutputs();
+  syncPreview();
 }
 
 function readForm(): Settings {
@@ -23,6 +25,34 @@ function readForm(): Settings {
 function syncOutputs() {
   $('widthv').textContent = $<HTMLInputElement>('width').value;
   $('radiusv').textContent = $<HTMLInputElement>('radius').value;
+}
+
+const previewBox = $('preview-box');
+const swatchBtns = [...document.querySelectorAll<HTMLButtonElement>('.swatch')];
+for (const btn of swatchBtns) btn.style.setProperty('--c', btn.dataset['color']!); // 色值单源注入，见 index.html 注释
+
+/** 预览框与色板选中态跟随表单；fillForm（含保存回填）与所有 input 事件都经此收敛 */
+function syncPreview() {
+  const { borderColor, borderWidth, borderRadius } = readForm();
+  previewBox.style.borderColor = borderColor;
+  previewBox.style.borderWidth = `${borderWidth}px`;
+  previewBox.style.borderRadius = `${borderRadius}px`;
+  previewBox.style.boxShadow = glowShadow(borderColor); // 预览同步真实标记的外围发光
+  const isPreset = swatchBtns.some(
+    (btn) => btn.dataset['color']!.toUpperCase() === borderColor.toUpperCase(),
+  );
+  for (const btn of swatchBtns) {
+    btn.classList.toggle('active', btn.dataset['color']!.toUpperCase() === borderColor.toUpperCase());
+  }
+  $<HTMLInputElement>('color').classList.toggle('active', !isPreset); // 非预设色时高亮自定义入口
+}
+
+for (const btn of swatchBtns) {
+  btn.addEventListener('click', () => {
+    const color = $<HTMLInputElement>('color');
+    color.value = btn.dataset['color']!;
+    color.dispatchEvent(new Event('input', { bubbles: true })); // 复用颜色 input 监听：立即保存 + 预览同步
+  });
 }
 
 report('get_settings', invoke<Settings>('get_settings').then(fillForm));
@@ -64,11 +94,15 @@ function saveNow() {
 /** 滑块拖动的高频 input：尾部防抖，避免每 tick 写盘和乱序回填旧值 */
 function saveDebounced() {
   syncOutputs();
+  syncPreview();
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(enqueueSave, 150);
 }
 
-$<HTMLInputElement>('color').addEventListener('input', () => { void saveNow(); });
+$<HTMLInputElement>('color').addEventListener('input', () => {
+  syncPreview();
+  void saveNow();
+});
 for (const id of ['width', 'radius']) {
   $<HTMLInputElement>(id).addEventListener('input', saveDebounced);
 }

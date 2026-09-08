@@ -150,15 +150,53 @@ pub(crate) fn end_selection(app: &AppHandle) {
     }
 }
 
+/// 标记窗发光边距（CSS px）。与 mark.html 的 #box inset 及 shared/glow.ts 的阴影外延为
+/// 跨文件契约（三处需同步），窗口据此外扩、前端 #box 内缩同样的量把边框画回确认位置
+const MARK_GLOW_MARGIN_CSS: f64 = 8.0;
+
+/// 标记窗几何：物理边距按目标屏缩放换算（分数 DPR 下 CSS↔物理各算各的，偏差 <1 物理 px）。
+/// i64/u64 升宽：ConfirmPayload 数值未经后端校验，i32 减法与 u32 加法在极值下会回绕/溢出
+fn mark_window_geometry(x: i32, y: i32, w: u32, h: u32, scale: f64) -> (i32, i32, u32, u32) {
+    // max(0.) 防负；NaN/极值经 float→int 饱和转换归 0（Rust 1.45+ 语义），物理边距只会"偏小"不会发散
+    let m = i64::from((MARK_GLOW_MARGIN_CSS * scale).round().max(0.0) as u32);
+    let x = (i64::from(x) - m).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let y = (i64::from(y) - m).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let w = (u64::from(w) + (m as u64) * 2).min(u64::from(u32::MAX)) as u32;
+    let h = (u64::from(h) + (m as u64) * 2).min(u64::from(u32::MAX)) as u32;
+    (x, y, w, h)
+}
+
+/// 目标矩形所在显示器的缩放：外扩边距必须按"落位屏"换算——窗口自身的 scale_factor 读到的是
+/// 移动前所在屏（复用路径=旧标记屏）或平台默认落位屏（新建路径=通常主屏），而 mark.html 的
+/// inset 由 webview 按落位后的屏解释，混合 DPI 多屏下二者失配会把边框画偏。中心点查屏，
+/// 跨屏/贴缝矩形退化为任一相交屏，仍查不到保底 1.0（边距偏小，不发散）
+fn rect_scale_factor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> f64 {
+    let cx = f64::from(x) + f64::from(w) / 2.0;
+    let cy = f64::from(y) + f64::from(h) / 2.0;
+    if let Ok(Some(m)) = app.monitor_from_point(cx, cy) {
+        return m.scale_factor();
+    }
+    if let Ok(monitors) = app.available_monitors() {
+        for m in &monitors {
+            if rect_intersects_any_monitor(x, y, w, h, &[MonitorRect::from(m)]) {
+                return m.scale_factor();
+            }
+        }
+    }
+    1.0
+}
+
 pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
-    // 已有标记窗优先复用（改位置/尺寸即可，mark.html 的 #box 是 inset:0 相对布局，内容自适应）：
+    // 缩放与窗口状态无关、只取决于矩形落位，两条路径共用一次求值
+    let (gx, gy, gw, gh) = mark_window_geometry(x, y, w, h, rect_scale_factor(app, x, y, w, h));
+    // 已有标记窗优先复用（改位置/尺寸即可，mark.html 的 #box 按 inset 内缩，内容自适应）：
     // destroy 是投递给事件循环的异步消息，label 要等 Destroyed 事件处理完才从窗口表移除；
     // 在同一线程里 destroy→build 中间事件循环一次都没跑，build 必撞 WindowLabelAlreadyExists
     // （重试同样来不及），结果就是旧框被拆、新框建不出。复用从根上消除该竞态，还免去 webview 重载。
     if let Some(win) = app.get_webview_window("mark") {
         let moved = win
-            .set_position(Position::Physical(PhysicalPosition::new(x, y)))
-            .and_then(|_| win.set_size(Size::Physical(PhysicalSize::new(w, h))));
+            .set_position(Position::Physical(PhysicalPosition::new(gx, gy)))
+            .and_then(|_| win.set_size(Size::Physical(PhysicalSize::new(gw, gh))));
         if moved.is_ok() {
             win.show()?;
             logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
@@ -178,8 +216,8 @@ pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tau
         .resizable(false)
         .visible(false)
         .build()?;
-    win.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
-    win.set_size(Size::Physical(PhysicalSize::new(w, h)))?;
+    win.set_position(Position::Physical(PhysicalPosition::new(gx, gy)))?;
+    win.set_size(Size::Physical(PhysicalSize::new(gw, gh)))?;
     win.set_ignore_cursor_events(true)?;
     win.show()?;
     logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
@@ -228,7 +266,7 @@ pub(crate) fn overlay_init(app: &AppHandle, label: &str) -> Option<OverlayInit> 
 
 #[cfg(test)]
 mod tests {
-    use super::rect_intersects_any_monitor;
+    use super::{mark_window_geometry, rect_intersects_any_monitor, MARK_GLOW_MARGIN_CSS};
     use crate::commands::MonitorRect;
 
     fn monitor(x: i32, y: i32, w: u32, h: u32) -> MonitorRect {
@@ -278,5 +316,24 @@ mod tests {
         assert!(!rect_intersects_any_monitor(i32::MAX, i32::MAX, u32::MAX, u32::MAX, &ms));
         // 常规坐标下极端尺寸仍与屏幕相交
         assert!(rect_intersects_any_monitor(0, 0, u32::MAX, u32::MAX, &ms));
+    }
+
+    #[test]
+    fn mark_geometry_expands_by_dpr_scaled_margin() {
+        // 整数 DPR：边距 = 8 × scale，四周各扩、宽高各加双边距
+        assert_eq!(mark_window_geometry(100, 200, 300, 400, 1.0), (92, 192, 316, 416));
+        assert_eq!(mark_window_geometry(100, 200, 300, 400, 2.0), (84, 184, 332, 432));
+        // 分数 DPR 取整：1.25 × 8 = 10
+        assert_eq!(mark_window_geometry(0, 0, 100, 100, 1.25), (-10, -10, 120, 120));
+    }
+
+    #[test]
+    fn mark_geometry_extreme_rect_saturates_instead_of_wrapping() {
+        // 契约同步钉子：CSS 常量若改动（外扩边距），这里失败提醒同步 mark.html / glow.ts
+        assert_eq!(MARK_GLOW_MARGIN_CSS, 8.0);
+        // 极值饱和而非回绕：i32::MIN - m 不得翻成正，u32::MAX + 2m 不得翻成小数
+        let (x, y, w, h) = mark_window_geometry(i32::MIN, i32::MIN, u32::MAX, u32::MAX, 2.0);
+        assert!(x < 0 && y < 0);
+        assert_eq!((w, h), (u32::MAX, u32::MAX));
     }
 }

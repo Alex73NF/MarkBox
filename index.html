@@ -4,32 +4,295 @@
     <meta charset="UTF-8" />
     <title>MarkBox</title>
     <style>
-      body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; color: #222; user-select: none; }
-      h1 { font-size: 16px; margin: 0 0 12px; }
-      .btns { display: flex; gap: 8px; margin-bottom: 16px; }
-      .btns button { padding: 8px 0; flex: 1; cursor: pointer; }
-      button:disabled { opacity: .45; cursor: not-allowed; }
-      fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 0; }
-      legend { font-size: 12px; color: #888; padding: 0 6px; }
-      .row { display: flex; align-items: center; gap: 8px; margin: 10px 2px; font-size: 13px; }
-      .row label { width: 52px; }
-      .row output { width: 28px; text-align: right; }
-      input[type="color"] { width: 40px; height: 24px; padding: 0; border: none; background: none; }
-      input[type="range"] { flex: 1; }
+      :root {
+        --paper: #fbfaff;
+        --ink: #2a2350;
+        --ink-60: rgba(42, 35, 80, 0.6);
+        --pink: #ff4fa3;
+        --green: #2fce7c;
+        --yellow: #ffd84d;
+        --yellow-deep: #f5b800;
+        --lilac: #e9e4ff;
+        --radius-card: 18px;
+        --font: ui-rounded, -apple-system, "SF Pro Text", "PingFang SC",
+          "Microsoft YaHei UI", system-ui, sans-serif;
+      }
+      body {
+        font-family: var(--font);
+        margin: 0;
+        padding: 20px 20px 18px;
+        color: var(--ink);
+        background: var(--paper);
+        user-select: none;
+      }
+
+      /* ---- 头部：wordmark 的 Box 被"高亮框"圈住，演示产品本身 ---- */
+      .wordmark {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: -0.3px;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .wordmark .boxed {
+        display: inline-block;
+        padding: 0 8px 1px;
+        border: 2.5px solid var(--yellow-deep);
+        border-radius: 10px 13px 9px 14px;
+        background: rgba(255, 216, 77, 0.22);
+        transform: rotate(-2deg);
+      }
+      .tagline {
+        margin: 7px 2px 0;
+        font-size: 12.5px;
+        color: var(--ink-60);
+      }
+
+      /* ---- 行动区：糖果药丸，硬偏移阴影做"贴纸浮起" ---- */
+      .btns {
+        display: flex;
+        gap: 12px;
+        margin: 16px 0;
+      }
+      .btns button {
+        font: 700 15px/1 var(--font);
+        padding: 14px 0;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+      .btn-primary {
+        flex: 1.4;
+        color: var(--ink);
+        background: var(--pink);
+        border: 2px solid var(--ink);
+        box-shadow: 0 4px 0 var(--ink);
+      }
+      .btn-ghost {
+        flex: 1;
+        color: var(--ink);
+        background: #fff;
+        border: 2px solid var(--ink);
+        box-shadow: 0 4px 0 var(--ink);
+      }
+      .btns button:not(:disabled):hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 0 var(--ink);
+      }
+      .btns button:not(:disabled):active {
+        transform: translateY(2px);
+        box-shadow: 0 1px 0 var(--ink);
+      }
+      .btns button:disabled {
+        cursor: not-allowed;
+        color: var(--ink-60);
+        background: #eae7f5;
+        border-color: var(--ink-60);
+        box-shadow: none;
+      }
+
+      /* ---- 外观卡：唯一的卡片，墨描边功能分组 ---- */
+      fieldset {
+        border: 2px solid var(--ink);
+        border-radius: var(--radius-card);
+        background: #fff;
+        box-shadow: 0 5px 0 var(--lilac);
+        margin: 0;
+        padding: 14px 14px 12px;
+      }
+      legend {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--ink-60);
+        padding: 0 6px;
+        margin-left: 10px;
+      }
+
+      /* 预览台：黄点纹"屏幕"，正中是活的标记框 */
+      .stage {
+        height: 92px;
+        border-radius: 12px;
+        background-color: #fff7d9;
+        background-image: radial-gradient(#f0e2a8 1.2px, transparent 1.3px);
+        background-size: 14px 14px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 4px;
+      }
+      .preview-box {
+        width: 172px;
+        height: 52px;
+        border: 3px solid var(--pink);
+        /* 加载前占位与默认一致（同 .btns 注释）；发光样式与真实标记同源，见 src/shared/glow.ts */
+        box-shadow: inset 0 0 5px 1px var(--pink), 0 0 5px 1px var(--pink);
+        display: grid;
+        place-items: center;
+        transition: border-color 0.12s ease, box-shadow 0.12s ease;
+      }
+      .preview-box span {
+        font-size: 11px;
+        color: rgba(42, 35, 80, 0.72);
+        padding: 0 8px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 11px 2px;
+        font-size: 13px;
+      }
+      .row > label {
+        width: 34px;
+        flex: none;
+      }
+
+      .swatches {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        flex: 1;
+      }
+      .swatch {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid var(--ink);
+        background: var(--c);
+        padding: 0;
+        cursor: pointer;
+        transition: transform 0.12s ease;
+      }
+      .swatch:hover {
+        transform: scale(1.15);
+      }
+      .swatch.active {
+        box-shadow: 0 0 0 3px var(--paper), 0 0 0 5.5px var(--ink);
+      }
+      /* 自定义色入口：包一层用两条交叉线画"+"，与预设色点区分开（原生 input 加不了内容）。
+         inline-flex 让包裹盒与 input 渲染盒严格重合；"+"不用文本而用 CSS 矩形——
+         字形墨迹相对 em 盒偏移随字体/平台漂移，矩形 + 50%定位是像素级居中 */
+      .custom-color {
+        position: relative;
+        margin-left: auto;
+        display: inline-flex;
+      }
+      .custom-color::before,
+      .custom-color::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        background: #fff;
+        border-radius: 2px;
+        box-shadow: 0 0 2px rgba(42, 35, 80, 0.9); /* 对称光晕：带偏移的阴影会让白条视觉重心下坠 */
+        pointer-events: none;
+      }
+      .custom-color::before { width: 12px; height: 2.5px; }
+      .custom-color::after { width: 2.5px; height: 12px; }
+      input[type="color"] {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px dashed var(--ink-60);
+        padding: 0;
+        background: none;
+        cursor: pointer;
+      }
+      input[type="color"].active {
+        border-style: solid;
+        border-color: var(--ink);
+        box-shadow: 0 0 0 3px var(--paper), 0 0 0 5.5px var(--ink);
+      }
+      input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+      input[type="color"]::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+      input[type="range"] {
+        flex: 1;
+        -webkit-appearance: none;
+        appearance: none;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--lilac);
+        outline-offset: 4px;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--pink);
+        border: 2px solid var(--ink);
+        box-shadow: 0 2px 0 var(--ink);
+        cursor: grab;
+      }
+      input[type="range"]:active::-webkit-slider-thumb { cursor: grabbing; }
+      .pill-num {
+        width: 30px;
+        height: 22px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        background: var(--yellow);
+        border: 1.5px solid var(--ink);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      button:focus-visible, input:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 3px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .btns button, .swatch, .preview-box { transition: none; }
+        .btns button:not(:disabled):hover { transform: none; }
+        .swatch:hover { transform: none; }
+      }
     </style>
   </head>
   <body>
-    <h1>MarkBox</h1>
+    <h1 class="wordmark">Mark<span class="boxed">Box</span></h1>
+    <p class="tagline">圈住「我要点的位置」</p>
     <!-- 下方按钮禁用态与 output 默认值均为加载前占位，与 Rust Settings::default() 保持一致，get_settings 返回后覆盖 -->
     <div class="btns">
-      <button id="start">开始圈选</button>
-      <button id="clear" disabled>清除标记</button>
+      <button id="start" class="btn-primary">开始圈选</button>
+      <button id="clear" class="btn-ghost" disabled>清除标记</button>
     </div>
     <fieldset>
       <legend>边框外观（即时生效）</legend>
-      <div class="row"><label>颜色</label><input type="color" id="color" value="#FF4D4F" /></div>
-      <div class="row"><label>粗细</label><input type="range" id="width" min="1" max="10" step="1" /><output id="widthv">3</output></div>
-      <div class="row"><label>圆角</label><input type="range" id="radius" min="0" max="16" step="1" /><output id="radiusv">0</output></div>
+      <div class="stage">
+        <div id="preview-box" class="preview-box"><span>标记效果</span></div>
+      </div>
+      <div class="row">
+        <label for="color">颜色</label>
+        <div class="swatches">
+          <!-- 色值单源：只存 data-color，--c 由 main.ts 启动时注入（避免两处人工同步漂移） -->
+          <button class="swatch" data-color="#FF4FA3" title="荧光粉" aria-label="荧光粉"></button>
+          <button class="swatch" data-color="#FF9838" title="活力橙" aria-label="活力橙"></button>
+          <button class="swatch" data-color="#FFD84D" title="马克黄" aria-label="马克黄"></button>
+          <button class="swatch" data-color="#2FCE7C" title="薄荷绿" aria-label="薄荷绿"></button>
+          <button class="swatch" data-color="#4CA9FF" title="晴空蓝" aria-label="晴空蓝"></button>
+          <button class="swatch" data-color="#9D7BFF" title="梦幻紫" aria-label="梦幻紫"></button>
+          <span class="custom-color">
+            <input type="color" id="color" value="#FF4FA3" title="自定义颜色" aria-label="自定义颜色" />
+          </span>
+        </div>
+      </div>
+      <div class="row">
+        <label for="width">粗细</label>
+        <input type="range" id="width" min="1" max="10" step="1" value="3" />
+        <output id="widthv" class="pill-num">3</output>
+      </div>
+      <div class="row">
+        <label for="radius">圆角</label>
+        <input type="range" id="radius" min="0" max="16" step="1" value="10" />
+        <output id="radiusv" class="pill-num">10</output>
+      </div>
     </fieldset>
     <script type="module" src="/src/main/main.ts"></script>
   </body>
