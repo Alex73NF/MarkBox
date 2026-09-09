@@ -11,7 +11,7 @@ use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 
-use crate::commands::MonitorRect;
+use crate::commands::{MonitorRect, PhysRect};
 
 #[derive(Default)]
 pub(crate) struct AppState {
@@ -24,6 +24,14 @@ pub(crate) struct AppState {
     pub(crate) selection_gen: AtomicU64,
     // 已就绪（overlay_ready 已到）的覆盖层：圈选看门狗据此发现"窗口在而前端死"的会话（windows.rs）
     pub(crate) ready_overlays: Mutex<std::collections::HashSet<String>>,
+    // 换框重建的中转矩形：spawn_mark 销毁旧窗时存入，mark 窗 Destroyed 事件取出异步重建
+    // （destroy 是投递消息、label 要等 Destroyed 处理完才移出窗口表，期间 build 必撞
+    // WindowLabelAlreadyExists——6d40d08 曾因此改旧窗复用，但 Windows 上对已可见的穿透
+    // 标记窗 set_position/set_size 静默失效，复用路径回退为事件驱动的销毁重建）。
+    // clear_mark 取走它即可取消在途重建（销毁请求已发出、Destroyed 尚未处理的窗口期）。
+    // 不变量：写入后 Destroyed 事件是唯一消费者；应用退出等极端时序下事件不再到来时
+    // pending 滞留属已知边界——mark_exists 保守报 true、清除按钮可点，下次 clear_mark 取走即自愈
+    pub(crate) pending_mark: Mutex<Option<PhysRect>>,
 }
 
 pub fn run() {
@@ -48,6 +56,7 @@ pub fn run() {
                 selecting: Mutex::default(),
                 selection_gen: AtomicU64::new(0),
                 ready_overlays: Mutex::default(),
+                pending_mark: Mutex::default(),
             });
 
             let select = MenuItem::with_id(app, "select", "圈选", true, None::<&str>)?;
@@ -79,6 +88,26 @@ pub fn run() {
             WindowEvent::Destroyed if window.label().starts_with("overlay-") => {
                 // 任一 overlay 被销毁（崩溃/拔屏）→ 兜底清掉全部圈选层
                 windows::end_selection(window.app_handle());
+            }
+            WindowEvent::Destroyed if window.label() == "mark" => {
+                // 换框重建的落地点：此刻 label 已移出窗口表，build 不会撞 WindowLabelAlreadyExists。
+                // 主线程建 WebView 窗口会死锁（wry#583，与圈选命令同一纪律），移到阻塞线程池执行
+                let app = window.app_handle();
+                let pending = app.state::<AppState>().pending_mark.lock().unwrap().take();
+                if let Some(r) = pending {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(e) = windows::build_mark(&app, r.x, r.y, r.w, r.h) {
+                            logging::log_error(&format!(
+                                "重建标记窗失败 rect=({},{},{},{}): {e}",
+                                r.x, r.y, r.w, r.h
+                            ));
+                            // 标记窗没建出来也要把主窗口还给用户，并让清除按钮回到真实状态
+                            windows::show_main(&app);
+                            windows::emit_mark_state(&app);
+                        }
+                    });
+                }
             }
             _ => {}
         })

@@ -17,6 +17,10 @@
         --font: ui-rounded, -apple-system, "SF Pro Text", "PingFang SC",
           "Microsoft YaHei UI", system-ui, sans-serif;
       }
+      /* 固定尺寸主窗永不滚动：Windows 高分屏下初始视口可能小于配置逻辑尺寸（内容随之
+         溢出，经典滚动条还会挤窄视口引发横竖双滚动条）。溢出兜底由 main.ts 的
+         fitWindowToContent 原地放大窗口解决，而不是放任滚动条遮挡设置区 */
+      html, body { overflow: hidden; }
       body {
         font-family: var(--font);
         margin: 0;

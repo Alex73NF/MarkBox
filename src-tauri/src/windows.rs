@@ -7,7 +7,7 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder,
 };
 
-use crate::commands::{MarkState, MonitorRect, OverlayInit};
+use crate::commands::{MarkState, MonitorRect, OverlayInit, PhysRect};
 use crate::logging;
 
 /// 圈选互斥标记的 RAII 复位：无论正常返回还是 panic 展开都恢复 false，防止标记滞留后圈选永久静默失效
@@ -60,6 +60,12 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
                 .title("markbox-overlay")
                 .decorations(false)
                 .transparent(true)
+                // tao 对 undecorated+shadow 会按 DWM frame insets 裁客户区（WM_NCCALCSIZE，
+                // 左右下≈边框厚度、Win11 顶部 1px）：webview 随客户区偏移，CSS(0,0) 不再是
+                // 显示器原点，而前端 toPhys 按原点换算——Windows 上确认出的框会比圈选位置
+                // 偏移数像素（同 1ea592a 标记窗灰线纹的机制，当时漏了覆盖层）。关掉后
+                // 客户区=外框=显示器矩形，坐标链零偏移
+                .shadow(false)
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .resizable(false)
@@ -71,8 +77,12 @@ pub(crate) fn begin_selection(app: &AppHandle) -> tauri::Result<()> {
                 logging::log_err(&format!("销毁 {label} 失败"), win.destroy());
                 return Ok(());
             }
-            win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
+            // 先定尺寸后定位再显示：tao macOS 的 setContentSize 锚定窗口左下角，若先定位后改尺寸，
+            // 窗口会自定位点向上生长、顶缘越出屏幕，show 时被 AppKit 约束压回可见区顶（菜单栏下），
+            // 全屏覆盖层因此整体下移一个菜单栏高、底部越屏——前端 toPhys 按 CSS 原点=显示器
+            // 原点换算，确认出的框就比圈选位置偏上同样的量。尺寸先行让定位成为最后一次几何操作
             win.set_size(Size::Physical(PhysicalSize::new(info.width, info.height)))?;
+            win.set_position(Position::Physical(PhysicalPosition::new(info.x, info.y)))?;
             win.show()?;
             // 键盘焦点是 Esc/Enter 取消/确认的前提：优先光标所在屏，否则兜底最后建出的
             if cursor.is_some_and(|c| {
@@ -187,26 +197,30 @@ fn rect_scale_factor(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> f64 {
 }
 
 pub(crate) fn spawn_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
-    let scale = rect_scale_factor(app, x, y, w, h);
-    // 缩放与窗口状态无关、只取决于矩形落位，两条路径共用一次求值
-    let (gx, gy, gw, gh) = mark_window_geometry(x, y, w, h, scale);
-    // 已有标记窗优先复用（改位置/尺寸即可，mark.html 的 #box 按 inset 内缩，内容自适应）：
-    // destroy 是投递给事件循环的异步消息，label 要等 Destroyed 事件处理完才从窗口表移除；
-    // 在同一线程里 destroy→build 中间事件循环一次都没跑，build 必撞 WindowLabelAlreadyExists
-    // （重试同样来不及），结果就是旧框被拆、新框建不出。复用从根上消除该竞态，还免去 webview 重载。
+    // 已有标记窗时换框：销毁旧窗 + 挂起重建（lib.rs 的 mark Destroyed 事件取出 pending_mark
+    // 在线程池重建）。不再沿用旧窗 set_position/set_size 改位——Windows 上对已可见的穿透
+    // 标记窗这两个调用会静默失效（实测现象：确认后老框不动、新框不出现），且它们只是投递
+    // 消息、必返 Ok，失败无从感知；销毁与新建恰是 Windows 上每轮圈选都在验证的可靠原语。
+    // 重建不能原地 build：destroy 是投递消息，label 要等 Destroyed 处理完才移出窗口表，
+    // 中间 build 必撞 WindowLabelAlreadyExists（6d40d08 的原始竞态），事件驱动天然避开
     if let Some(win) = app.get_webview_window("mark") {
-        let moved = win
-            .set_position(Position::Physical(PhysicalPosition::new(gx, gy)))
-            .and_then(|_| win.set_size(Size::Physical(PhysicalSize::new(gw, gh))));
-        if moved.is_ok() {
-            win.show()?;
-            logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
-            return Ok(());
+        *app.state::<crate::AppState>().pending_mark.lock().unwrap() = Some(PhysRect { x, y, w, h });
+        if let Err(e) = win.destroy() {
+            // 销毁请求都没发出去：Destroyed 不会来，清掉挂起矩形避免重建通道滞留
+            *app.state::<crate::AppState>().pending_mark.lock().unwrap() = None;
+            return Err(e);
         }
-        // 极小窗口：复用中途窗口刚被销毁（清除标记后瞬间确认），落回新建；若 label 仍在
-        // 销毁流程中导致 build 失败，错误上抛由调用方记录并还回主窗口
-        logging::log_err("复用旧标记窗失败，改为重建", moved);
+        logging::log_err("发送 mark-state 失败", app.emit_to("main", "mark-state", &MarkState { has_mark: true }));
+        return Ok(());
     }
+    build_mark(app, x, y, w, h)
+}
+
+/// 真正落建标记窗（首次确认与 Destroyed 事件触发的换框重建共用）。
+/// 几何在此时现算：重建路径从挂起到执行可能跨越显示器拓扑变化，不复用确认时刻的换算
+pub(crate) fn build_mark(app: &AppHandle, x: i32, y: i32, w: u32, h: u32) -> tauri::Result<()> {
+    let scale = rect_scale_factor(app, x, y, w, h);
+    let (gx, gy, gw, gh) = mark_window_geometry(x, y, w, h, scale);
     let win = WebviewWindowBuilder::new(app, "mark", WebviewUrl::App("mark.html".into()))
         .title("markbox-mark")
         .decorations(false)
@@ -236,7 +250,10 @@ pub(crate) fn destroy_mark(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub(crate) fn mark_exists(app: &AppHandle) -> bool {
+    // 换框的销毁→重建窗口期（旧窗已销毁、新窗未落成）也视为"有标记"：
+    // 清除按钮不能在这几十毫秒里失灵，真失败由 Destroyed 事件侧的 emit 校正
     app.get_webview_window("mark").is_some()
+        || app.state::<crate::AppState>().pending_mark.lock().unwrap().is_some()
 }
 
 pub(crate) fn emit_mark_state(app: &AppHandle) {

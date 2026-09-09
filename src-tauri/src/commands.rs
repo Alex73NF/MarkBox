@@ -1,7 +1,7 @@
 //! IPC 边界：7 个 tauri command 的实现、前后端契约类型（serde camelCase）与托盘事件分发
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::logging;
 use crate::settings;
@@ -90,7 +90,9 @@ pub(crate) fn overlay_ready(app: AppHandle, state: tauri::State<AppState>, label
     Ok(init)
 }
 
-// async：确认链路要创建标记窗，同 start_selection 的 Windows 死锁规避（见文件头注释 1）
+// async：确认链路要创建标记窗，同 start_selection 的 Windows 死锁规避（见文件头注释 1）。
+// 换框路径（销毁旧窗+挂起重建）在这里只投递消息必返 Ok，真正的重建失败在 lib.rs 的
+// mark Destroyed 事件侧记录日志并还回主窗口；本命令的 Err 分支覆盖首次新建的同步失败
 #[tauri::command(async)]
 pub(crate) fn confirm_selection(app: AppHandle, payload: ConfirmPayload) -> Result<(), String> {
     let r = &payload.rect;
@@ -123,6 +125,9 @@ pub(crate) fn cancel_selection(app: AppHandle) {
 
 #[tauri::command]
 pub(crate) fn clear_mark(app: AppHandle) {
+    // 先取消在途的换框重建（spawn_mark 已挂起 pending_mark、Destroyed 尚未处理的窗口期），
+    // 再销毁现存窗口——否则 Destroyed 事件会把用户刚清除的框原样重建回来
+    app.state::<AppState>().pending_mark.lock().unwrap().take();
     // destroy 在事件循环异步生效，成功后查询会拿到过期状态：按销毁请求结果广播——
     // 失败时保守置 true，按钮保持可用（托盘清除是重试通道）
     let has_mark = windows::destroy_mark(&app).is_err();

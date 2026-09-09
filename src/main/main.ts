@@ -1,7 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { PhysicalSize } from '@tauri-apps/api/dpi';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { MarkState, Settings } from '../shared/types';
 import { glowShadow } from '../shared/glow';
+import { fitViewport } from '../shared/fit';
 import { report } from '../shared/report';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -109,6 +112,25 @@ for (const id of ['width', 'radius']) {
 
 $('start').addEventListener('click', () => report('start_selection', invoke('start_selection')));
 $('clear').addEventListener('click', () => report('clear_mark', invoke('clear_mark')));
+
+/** 主窗固定尺寸（tauri.conf.json 420×460 逻辑像素），内容装不下视口时把窗口原地放大
+ *  到内容实际大小兜底——macOS 基准布局（内容 429px < 窗高 460px）不触发。已知诱因：
+ *  Windows 高分屏下初始视口与配置逻辑尺寸失配。目标用物理像素（目标×devicePixelRatio，
+ *  ceil 取整）：与 toPhys 同一换算纪律，且目标值与当前视口解耦——无论是逻辑/物理解释
+ *  失配还是跨屏 DPR 变化后的重入，都一步收敛到"视口=内容"，不会振荡 */
+async function fitWindowToContent(): Promise<void> {
+  const de = document.documentElement;
+  const target = fitViewport(window.innerWidth, window.innerHeight, de.scrollWidth, de.scrollHeight);
+  if (!target) return;
+  const dpr = window.devicePixelRatio;
+  await getCurrentWebviewWindow().setSize(
+    new PhysicalSize(Math.ceil(target.w * dpr), Math.ceil(target.h * dpr)),
+  );
+}
+
+window.addEventListener('load', () => report('fit-window', fitWindowToContent()));
+// 跨屏拖动后 DPR 变化会让视口按新比例重算，可能重新装不下内容
+window.addEventListener('resize', () => report('fit-window', fitWindowToContent()));
 
 report('mark-state:listen', listen<MarkState>('mark-state', (e) => {
   $<HTMLButtonElement>('clear').disabled = !e.payload.hasMark;

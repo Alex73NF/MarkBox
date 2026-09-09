@@ -4,7 +4,9 @@
     <style>
       /* inset 与 Rust 侧 MARK_GLOW_MARGIN_CSS 配套（跨文件契约）：窗口比标记矩形四周外扩 8px，
          #box 内缩同样的量把边框画回确认位置，外扩区域承载外侧发光（见 shared/glow.ts） */
-      html,body{margin:0;width:100%;height:100%;background:transparent}
+      /* overflow:hidden：窗口与内容精确贴合（外扩边距承载发光），任何 1px 取整误差
+         都不该在透明标记窗里滚出一条滚动条 */
+      html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
       #box{position:fixed;inset:8px;box-sizing:border-box;border-style:solid;visibility:hidden}
     </style>
   </head>
